@@ -5,9 +5,12 @@ import tradeExecutor from './services/tradeExecutor';
 import tradeMonitor from './services/tradeMonitor';
 import test from './test/test';
 import getMyBalance from './utils/getMyBalance';
+import moment from 'moment';
+import fetchData from './utils/fetchData';
 
 const USER_ADDRESS = ENV.USER_ADDRESS;
 const PROXY_WALLET = ENV.PROXY_WALLET;
+const TRADE_SCALE = ENV.TRADE_SCALE;
 
 export const main = async () => {
     await connectDB();
@@ -15,6 +18,7 @@ export const main = async () => {
     console.log(`My Wallet addresss is: ${PROXY_WALLET}`);
 
     // Fetch and log balances
+    let ratio = 0;
     try {
         const targetBalance = await getMyBalance(USER_ADDRESS);
         const myBalance = await getMyBalance(PROXY_WALLET);
@@ -23,13 +27,60 @@ export const main = async () => {
         console.log(`My Wallet Balance:   ${myBalance} USDC`);
 
         if (targetBalance > 0) {
-            console.log(`Trading Ratio:       ${(myBalance / targetBalance).toFixed(4)}`);
+            ratio = myBalance / targetBalance;
+            console.log(`Trading Ratio:       ${ratio.toFixed(4)}`);
+            console.log(`Trade Scale:         ${TRADE_SCALE.toFixed(2)}x`);
+            console.log(`Effective Multiplier: ${(ratio * TRADE_SCALE).toFixed(4)}`);
         } else {
             console.log(`Trading Ratio:       N/A (Target balance is 0)`);
         }
         console.log('--------------------------------------------------');
     } catch (error) {
         console.error('Failed to fetch initial balances:', error);
+    }
+
+    // Fetch and log recent target activity
+    console.log('Fetching recent target activity...');
+    try {
+        const url = `https://data-api.polymarket.com/activity?user=${USER_ADDRESS}&limit=5&type=TRADE`;
+        const activities = await fetchData(url);
+
+        if (Array.isArray(activities) && activities.length > 0) {
+            const today = moment().startOf('day');
+            const recentTrades = activities.filter((activity: any) => moment(activity.timestamp * 1000).isSameOrAfter(today));
+
+            console.log('--------------------------------------------------');
+            console.log(`Recent Target Activity (Today: ${today.format('YYYY-MM-DD')})`);
+
+            if (recentTrades.length === 0) {
+                console.log('No trades found for today.');
+            } else {
+                recentTrades.forEach((trade: any) => {
+                    const time = moment(trade.timestamp * 1000).format('HH:mm:ss');
+                    let myEst = "";
+                    if (ratio > 0) {
+                        // Estimate my share size and cost
+                        const rawCost = trade.usdcSize * ratio * TRADE_SCALE;
+                        let myCost = rawCost;
+                        let cappedMsg = "";
+
+                        if (rawCost > ENV.MAX_TRADE_AMOUNT) {
+                            myCost = ENV.MAX_TRADE_AMOUNT;
+                            cappedMsg = " (CAPPED)";
+                        }
+
+                        // Recalculate size based on capped cost
+                        const mySize = (myCost / trade.price).toFixed(2);
+
+                        myEst = ` | My Est: ${mySize} shares (~$${myCost.toFixed(2)}${cappedMsg})`;
+                    }
+                    console.log(`[${time}] ${trade.side} ${trade.size} ${trade.asset} @ ${trade.price}${myEst}`);
+                });
+            }
+            console.log('--------------------------------------------------');
+        }
+    } catch (error) {
+        console.error('Failed to fetch recent activity:', error);
     }
 
     const clobClient = await createClobClient();

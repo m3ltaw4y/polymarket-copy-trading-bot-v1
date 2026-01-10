@@ -5,6 +5,8 @@ import { ENV } from '../config/env';
 
 const RETRY_LIMIT = ENV.RETRY_LIMIT;
 const USER_ADDRESS = ENV.USER_ADDRESS;
+const TRADE_SCALE = ENV.TRADE_SCALE;
+const MAX_TRADE_AMOUNT = ENV.MAX_TRADE_AMOUNT;
 const UserActivity = getUserActivityModel(USER_ADDRESS);
 
 const postOrder = async (
@@ -73,10 +75,20 @@ const postOrder = async (
             await UserActivity.updateOne({ _id: trade._id }, { bot: true });
         }
     } else if (condition === 'buy') {       //Buy strategy
-        console.log('Buy Strategy...');
+        console.log(`Buy Strategy (Scale: ${TRADE_SCALE})...`);
         const ratio = my_balance / (user_balance + trade.usdcSize);
         console.log('ratio', ratio);
-        let remaining = trade.usdcSize * ratio;
+
+        // Calculate raw amount
+        let calculatedAmount = trade.usdcSize * ratio * TRADE_SCALE;
+
+        // Apply Cap
+        if (calculatedAmount > MAX_TRADE_AMOUNT) {
+            console.log(`Trade amount ${calculatedAmount} exceeds limits. Capping at ${MAX_TRADE_AMOUNT}`);
+            calculatedAmount = MAX_TRADE_AMOUNT;
+        }
+
+        let remaining = calculatedAmount;
         let retry = 0;
         while (remaining > 0 && retry < RETRY_LIMIT) {
             const orderBook = await clobClient.getOrderBook(trade.asset);
@@ -130,7 +142,7 @@ const postOrder = async (
             await UserActivity.updateOne({ _id: trade._id }, { bot: true });
         }
     } else if (condition === 'sell') {          //Sell strategy
-        console.log('Sell Strategy...');
+        console.log(`Sell Strategy (Scale: ${TRADE_SCALE})...`);
         let remaining = 0;
         if (!my_position) {
             console.log('No position to sell');
@@ -140,7 +152,9 @@ const postOrder = async (
         } else {
             const ratio = trade.size / (user_position.size + trade.size);
             console.log('ratio', ratio);
-            remaining = my_position.size * ratio;
+            // Apply scale but clamp to available position size
+            const calculatedSell = my_position.size * ratio * TRADE_SCALE;
+            remaining = Math.min(calculatedSell, my_position.size);
         }
         let retry = 0;
         while (remaining > 0 && retry < RETRY_LIMIT) {
