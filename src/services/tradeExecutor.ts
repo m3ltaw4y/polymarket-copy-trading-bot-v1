@@ -43,6 +43,15 @@ const doTrading = async (clobClient: ClobClient) => {
         const user_balance = await getMyBalance(USER_ADDRESS);
         console.log('My current balance:', my_balance);
         console.log('User current balance:', user_balance);
+        await postOrder(
+            clobClient,
+            trade.side.toLowerCase(),
+            my_position,
+            user_position,
+            trade,
+            my_balance,
+            user_balance
+        );
     }
 };
 
