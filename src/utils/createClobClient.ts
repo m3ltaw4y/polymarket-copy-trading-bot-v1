@@ -16,12 +16,12 @@ const createClobClient = async (): Promise<ClobClient> => {
         chainId,
         wallet,
         undefined,
-        SignatureType.POLY_GNOSIS_SAFE,
+        SignatureType.POLY_PROXY,
         PROXY_WALLET as string
     );
 
     const originalConsoleError = console.error;
-    console.error = function () {};
+    console.error = function () { };
     let creds = await clobClient.createApiKey();
     console.error = originalConsoleError;
     if (creds.key) {
@@ -36,7 +36,7 @@ const createClobClient = async (): Promise<ClobClient> => {
         chainId,
         wallet,
         creds,
-        SignatureType.POLY_GNOSIS_SAFE,
+        SignatureType.POLY_PROXY,
         PROXY_WALLET as string
     );
     console.log(clobClient);
