@@ -19,27 +19,40 @@ export const main = async () => {
 
     // Fetch and log balances
     let ratio = 0;
-    try {
-        const targetBalance = await getMyBalance(USER_ADDRESS);
-        const myBalance = await getMyBalance(PROXY_WALLET);
-        console.log('--------------------------------------------------');
-        console.log(`Target User Balance: ${targetBalance} USDC`);
-        console.log(`My Wallet Balance:   ${myBalance} USDC`);
+    if (!ENV.DRY_RUN) {
+        try {
+            const targetBalance = await getMyBalance(USER_ADDRESS);
+            const myBalance = await getMyBalance(PROXY_WALLET);
+            console.log('--------------------------------------------------');
+            console.log(`Target User Balance: ${targetBalance} USDC`);
+            console.log(`My Wallet Balance:   ${myBalance} USDC`);
 
-        if (targetBalance > 0) {
-            ratio = myBalance / targetBalance;
-            console.log(`Trading Ratio:       ${ratio.toFixed(4)}`);
-            console.log(`Trade Scale:         ${TRADE_SCALE.toFixed(2)}x`);
-            console.log(`Max Trade Amount:    $${ENV.MAX_TRADE_AMOUNT.toFixed(2)}`);
-            console.log(`Title Filter:        ${ENV.TITLE_FILTER || 'NONE'}`);
-            console.log(`Exact Match Mode:    ${ENV.TRADE_EXACT ? 'ON' : 'OFF'}`);
-            console.log(`Effective Multiplier: ${(ratio * TRADE_SCALE).toFixed(4)}`);
-        } else {
-            console.log(`Trading Ratio:       N/A (Target balance is 0)`);
+            if (targetBalance > 0) {
+                ratio = myBalance / targetBalance;
+                console.log(`Trading Ratio:       ${ratio.toFixed(4)}`);
+                console.log(`Trade Scale:         ${TRADE_SCALE.toFixed(2)}x`);
+                console.log(`Max Trade Amount:    $${ENV.MAX_TRADE_AMOUNT.toFixed(2)}`);
+                console.log(`Title Filter:        ${ENV.TITLE_FILTER || 'NONE'}`);
+                console.log(`Exact Match Mode:    ${ENV.TRADE_EXACT ? 'ON' : 'OFF'}`);
+                console.log(`Dry Run Mode:        OFF`);
+                console.log(`Effective Multiplier: ${(ratio * TRADE_SCALE).toFixed(4)}`);
+            } else {
+                console.log(`Trading Ratio:       N/A (Target balance is 0)`);
+            }
+            console.log('--------------------------------------------------');
+        } catch (error) {
+            console.error('Failed to fetch initial balances:', error);
         }
+    } else {
         console.log('--------------------------------------------------');
-    } catch (error) {
-        console.error('Failed to fetch initial balances:', error);
+        console.log(`Dry Run Mode:        ON`);
+        console.log(`Trade Scale:         ${TRADE_SCALE.toFixed(2)}x`);
+        console.log(`Max Trade Amount:    $${ENV.MAX_TRADE_AMOUNT.toFixed(2)}`);
+        console.log(`Title Filter:        ${ENV.TITLE_FILTER || 'NONE'}`);
+        console.log(`Exact Match Mode:    ${ENV.TRADE_EXACT ? 'ON' : 'OFF'}`);
+        console.log(`Balances:            SKIPPED (Dry Run)`);
+        console.log('--------------------------------------------------');
+        ratio = 1;
     }
 
     // Fetch and log recent target activity
@@ -61,7 +74,11 @@ export const main = async () => {
                 recentTrades.forEach((trade: any) => {
                     const time = moment(trade.timestamp * 1000).format('HH:mm:ss');
                     let myEst = "";
-                    if (ratio > 0) {
+                    if (ENV.DRY_RUN) {
+                        const myCost = trade.usdcSize;
+                        const mySize = (myCost / trade.price).toFixed(2);
+                        myEst = ` | [DRY RUN] Est: ${mySize} shares (~$${myCost.toFixed(2)})`;
+                    } else if (ratio > 0) {
                         // Estimate my share size and cost
                         let rawCost = 0;
                         if (ENV.TRADE_EXACT) {

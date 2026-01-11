@@ -44,4 +44,5 @@ export const ENV = {
     TRADE_EXACT: (process.env.TRADE_EXACT || '').trim().startsWith('1'),
     MAX_PRICE_DIFF: parseFloat(process.env.MAX_PRICE_DIFF || '0'),
     LOG_ONLY_SUCCESS: (process.env.LOG_ONLY_SUCCESS || '').trim().startsWith('1'),
+    DRY_RUN: (process.env.DRY_RUN || '').trim().startsWith('1'),
 };

@@ -2,6 +2,7 @@ import { ClobClient, OrderType, Side } from '@polymarket/clob-client';
 import { UserActivityInterface, UserPositionInterface } from '../interfaces/User';
 import { getUserActivityModel } from '../models/userHistory';
 import { ENV } from '../config/env';
+import { DryRunPosition, DryRunTrade } from '../models/dryRun';
 
 const RETRY_LIMIT = ENV.RETRY_LIMIT;
 const USER_ADDRESS = ENV.USER_ADDRESS;
@@ -46,11 +47,12 @@ const postOrder = async (
                 console.log('Max price bid:', maxPriceBid);
             }
             const currentPriceMerge = parseFloat(maxPriceBid.price);
-            if (Math.abs(currentPriceMerge - trade.price) > ENV.MAX_PRICE_DIFF) {
+            if (!ENV.DRY_RUN && Math.abs(currentPriceMerge - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceMerge}, target ${trade.price} (diff ${Math.abs(currentPriceMerge - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
                 await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 break;
             }
+
             let order_arges;
             if (remaining <= parseFloat(maxPriceBid.size)) {
                 order_arges = {
@@ -101,7 +103,10 @@ const postOrder = async (
         // Calculate raw amount
         // Calculate amount based on strategy
         let calculatedAmount = 0;
-        if (ENV.TRADE_EXACT) {
+        if (ENV.DRY_RUN) {
+            calculatedAmount = trade.usdcSize;
+            console.log(`[DRY RUN] 1:1 Matching mode. Size: $${calculatedAmount.toFixed(2)}`);
+        } else if (ENV.TRADE_EXACT) {
             calculatedAmount = trade.usdcSize * TRADE_SCALE;
             if (!ENV.LOG_ONLY_SUCCESS) {
                 console.log(`[EXACT MODE] Scaled trade size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${TRADE_SCALE})`);
@@ -114,7 +119,7 @@ const postOrder = async (
         }
 
         // Apply Cap
-        if (calculatedAmount > MAX_TRADE_AMOUNT) {
+        if (!ENV.DRY_RUN && calculatedAmount > MAX_TRADE_AMOUNT) {
             console.log(`Trade amount ${calculatedAmount.toFixed(2)} exceeds limits. Capping at ${MAX_TRADE_AMOUNT}`);
             calculatedAmount = MAX_TRADE_AMOUNT;
         }
@@ -136,11 +141,17 @@ const postOrder = async (
 
             console.log('Min price ask:', minPriceAsk);
             const currentPriceBuy = parseFloat(minPriceAsk.price);
-            if (Math.abs(currentPriceBuy - trade.price) > ENV.MAX_PRICE_DIFF) {
+            if (!ENV.DRY_RUN && Math.abs(currentPriceBuy - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceBuy}, target ${trade.price} (diff ${Math.abs(currentPriceBuy - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
                 await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 break;
             }
+
+            if (ENV.DRY_RUN) {
+                await simulateTrade(trade, 'BUY', remaining / currentPriceBuy, currentPriceBuy);
+                break;
+            }
+
             let order_arges;
             if (remaining <= parseFloat(minPriceAsk.size) * parseFloat(minPriceAsk.price)) {
                 order_arges = {
@@ -215,11 +226,12 @@ const postOrder = async (
                 console.log('Max price bid:', maxPriceBid);
             }
             const currentPriceSell = parseFloat(maxPriceBid.price);
-            if (Math.abs(currentPriceSell - trade.price) > ENV.MAX_PRICE_DIFF) {
+            if (!ENV.DRY_RUN && Math.abs(currentPriceSell - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceSell}, target ${trade.price} (diff ${Math.abs(currentPriceSell - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
                 await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 break;
             }
+
             let order_arges;
             if (remaining <= parseFloat(maxPriceBid.size)) {
                 order_arges = {
@@ -261,6 +273,49 @@ const postOrder = async (
     } else {
         console.log('Condition not supported');
     }
+};
+
+const simulateTrade = async (trade: UserActivityInterface, side: string, size: number, price: number) => {
+    const usdcSize = size * price;
+    console.log(`[DRY RUN] Simulating ${side} trade for ${trade.title} (${trade.outcome}) @ ${price}. Size: ${size}, USDC: $${usdcSize.toFixed(2)}`);
+
+    const newDryRunTrade = new DryRunTrade({
+        title: trade.title,
+        side: side,
+        outcome: trade.outcome,
+        price: price,
+        size: size,
+        usdcSize: usdcSize,
+        timestamp: Math.floor(Date.now() / 1000),
+    });
+    await newDryRunTrade.save();
+
+    // Update DryRunPosition
+    let position = await DryRunPosition.findOne({ conditionId: trade.conditionId, outcome: trade.outcome });
+    if (!position) {
+        position = new DryRunPosition({
+            conditionId: trade.conditionId,
+            title: trade.title,
+            outcome: trade.outcome,
+        });
+    }
+
+    if (side === 'BUY') {
+        const newTotalSpend = position.totalSpend + usdcSize;
+        const newTotalShares = position.totalShares + size;
+        position.avgPrice = newTotalSpend / newTotalShares;
+        position.totalSpend = newTotalSpend;
+        position.totalShares = newTotalShares;
+    }
+
+    await position.save();
+
+    // Mark activity as processed
+    await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+
+    // Print summary if requested? 
+    // The user said: "when looking for new trades, if you notice one of the trades we have bets on is closed, print out a summary"
+    // I'll handle the "closed" detection in tradeExecutor.
 };
 
 export default postOrder;
