@@ -151,74 +151,89 @@ const resolveMarketPositions = async () => {
 
     for (const conditionId of marketIds) {
         try {
-            // Try conditionId parameter (most common in modern Gamma API)
+            // Try condition_id parameter
             const url = `https://gamma-api.polymarket.com/markets?condition_id=${conditionId}`;
             const markets = await fetchData(url);
             if (!markets || !Array.isArray(markets) || markets.length === 0) continue;
 
             const market = markets.find(m => m.conditionId === conditionId || m.condition_id === conditionId);
-            if (!market) {
-                // Not found or ID mismatch (preventing generic Joe Biden fallback)
-                continue;
-            }
+            if (!market) continue;
 
             // Apply TITLE_FILTER to resolution logic as well
             if (ENV.TITLE_FILTER && ENV.TITLE_FILTER.trim() !== '') {
                 const filterText = ENV.TITLE_FILTER.toLowerCase();
                 const marketTitle = (market.question || '').toLowerCase();
-                if (!marketTitle.includes(filterText)) {
-                    continue; // Skip markets that don't match the current filter
-                }
+                if (!marketTitle.includes(filterText)) continue;
             }
 
-            if (market.closed === true) {
-                console.log(`\n[DRY RUN] Market Resolved (ID: ${conditionId}): ${market.question || 'Unknown Market'}`);
+            // aggressive check: if not active OR closed=true OR disputed=true
+            const isResolved = market.closed === true || market.active === false || market.disputed === true;
 
-                // Determine winning outcome index
-                // Note: outcomePrices can sometimes be a stringified array in certain API versions
+            if (isResolved) {
+                console.log(`\n[DRY RUN] Market Ended/Disputed (ID: ${conditionId}): ${market.question || 'Unknown Market'}`);
+                console.log(`Status: ${market.closed ? 'Closed' : (market.disputed ? 'Disputed' : 'Inactive')}`);
+
+                // Determine winning outcome index if possible
                 let prices = market.outcomePrices;
                 if (typeof prices === 'string') {
-                    try { prices = JSON.parse(prices); } catch (e) {
-                        // Fallback for simple scalar strings if they exist
-                        prices = [prices];
-                    }
+                    try { prices = JSON.parse(prices); } catch (e) { prices = [prices]; }
                 }
 
-                if (!Array.isArray(prices)) {
-                    console.error(`Could not parse outcomePrices for ${conditionId}:`, market.outcomePrices);
-                    continue;
-                }
+                const winningIndex = Array.isArray(prices) ? prices.findIndex((p: any) => p === "1" || p === "1.0" || p === 1) : -1;
 
-                const winningIndex = prices.findIndex((p: any) => p === "1" || p === "1.0" || p === 1);
+                const marketPositions = activePositions.filter((p) => p.conditionId === conditionId);
 
                 if (winningIndex !== -1 && market.outcomes) {
                     const winningOutcome = market.outcomes[winningIndex];
                     console.log(`Winning Outcome: ${winningOutcome}`);
 
-                    const marketPositions = activePositions.filter((p) => p.conditionId === conditionId);
-
                     for (const p of marketPositions) {
                         const won = p.outcome.toLowerCase() === winningOutcome.toLowerCase();
-                        const finalReturn = won ? p.totalShares : 0;
-
-                        console.log(`Outcome ${p.outcome}: ${won ? '🏆 WON' : '❌ LOST'}`);
-
-                        // Update position with final result
-                        p.totalReturn = finalReturn;
+                        p.totalReturn = won ? p.totalShares : 0;
                         p.isClosed = true;
                         await p.save();
                     }
-
-                    // Print final summary for this market
-                    await checkAndPrintSummary(market.question || 'Resolved Market', undefined, conditionId);
                 } else {
-                    console.log(`[DRY RUN] Market ${conditionId} closed but no clear winner found yet.`);
+                    console.log(`No clear winner found yet (Dispute period?). Reporting current valuation.`);
+                    for (const p of marketPositions) {
+                        // Use current price for valuation if winner not set
+                        const currentWeight = Array.isArray(prices) ? parseFloat(prices[market.outcomes.indexOf(p.outcome)]) || 0 : 0;
+                        p.totalReturn = p.totalShares * currentWeight;
+                        p.isClosed = true;
+                        await p.save();
+                    }
                 }
+
+                // Print final summary
+                await checkAndPrintSummary(market.question || 'Resolved Market', undefined, conditionId);
             }
         } catch (error) {
             console.error(`Error resolving market ${conditionId}:`, error);
         }
     }
+};
+
+const printOpenPositionsStatus = async () => {
+    const activePositions = await DryRunPosition.find({ isClosed: false });
+    if (activePositions.length === 0) return;
+
+    console.log('\n--------------------------------------------------');
+    console.log(`🕒 [DRY RUN STATUS] Open Positions (${new Date().toLocaleTimeString()})`);
+
+    // Group by title for cleaner output
+    const groups: { [key: string]: typeof activePositions } = {};
+    activePositions.forEach(p => {
+        if (!groups[p.title]) groups[p.title] = [];
+        groups[p.title].push(p);
+    });
+
+    for (const title in groups) {
+        console.log(`Market: ${title}`);
+        groups[title].forEach(p => {
+            console.log(`  - ${p.outcome}: Spent $${p.totalSpend.toFixed(2)} (${p.totalShares.toFixed(2)} shares @ $${p.avgPrice.toFixed(4)})`);
+        });
+    }
+    console.log('--------------------------------------------------\n');
 };
 
 const checkAndPrintSummary = async (title: string, exitPrice?: number, conditionId?: string) => {
@@ -281,8 +296,9 @@ const tradeExcutor = async (clobClient: ClobClient) => {
             spinner.start('Waiting for new transactions');
         }
 
-        // Periodically check for market resolution in Dry Run mode
+        // Periodically check for market resolution and print status in Dry Run mode
         if (ENV.DRY_RUN && (Date.now() - lastResolveCheck > 60000)) {
+            await printOpenPositionsStatus();
             await resolveMarketPositions();
             lastResolveCheck = Date.now();
         }

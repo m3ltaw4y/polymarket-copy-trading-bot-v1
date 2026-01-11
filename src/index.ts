@@ -7,6 +7,7 @@ import test from './test/test';
 import getMyBalance from './utils/getMyBalance';
 import moment from 'moment';
 import fetchData from './utils/fetchData';
+import { DryRunPosition, DryRunTrade } from './models/dryRun';
 
 const USER_ADDRESS = ENV.USER_ADDRESS;
 const PROXY_WALLET = ENV.PROXY_WALLET;
@@ -51,6 +52,16 @@ export const main = async () => {
         console.log(`Title Filter:        ${ENV.TITLE_FILTER || 'NONE'}`);
         console.log(`Exact Match Mode:    ${ENV.TRADE_EXACT ? 'ON' : 'OFF'}`);
         console.log(`Balances:            SKIPPED (Dry Run)`);
+
+        // Clear dry run data on startup
+        try {
+            await DryRunTrade.deleteMany({});
+            await DryRunPosition.deleteMany({});
+            console.log(`Dry Run Data:        CLEARED`);
+        } catch (e) {
+            console.error('Failed to clear dry run data:', e);
+        }
+
         console.log('--------------------------------------------------');
         ratio = 1;
     }
