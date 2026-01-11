@@ -80,15 +80,24 @@ const postOrder = async (
         console.log('ratio', ratio);
 
         // Calculate raw amount
-        let calculatedAmount = trade.usdcSize * ratio * TRADE_SCALE;
+        // Calculate amount based on strategy
+        let calculatedAmount = 0;
+        if (ENV.TRADE_EXACT) {
+            calculatedAmount = trade.usdcSize;
+            console.log(`[EXACT MODE] Copying trade size: $${calculatedAmount.toFixed(2)}`);
+        } else {
+            calculatedAmount = trade.usdcSize * ratio * TRADE_SCALE;
+            console.log(`[SCALE MODE] Proportional size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${ratio.toFixed(4)} * ${TRADE_SCALE})`);
+        }
 
         // Apply Cap
         if (calculatedAmount > MAX_TRADE_AMOUNT) {
-            console.log(`Trade amount ${calculatedAmount} exceeds limits. Capping at ${MAX_TRADE_AMOUNT}`);
+            console.log(`Trade amount ${calculatedAmount.toFixed(2)} exceeds limits. Capping at ${MAX_TRADE_AMOUNT}`);
             calculatedAmount = MAX_TRADE_AMOUNT;
         }
 
         let remaining = calculatedAmount;
+        // Post buy orders...
         let retry = 0;
         while (remaining > 0 && retry < RETRY_LIMIT) {
             const orderBook = await clobClient.getOrderBook(trade.asset);

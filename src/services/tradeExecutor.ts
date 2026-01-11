@@ -35,6 +35,27 @@ const readTempTrade = async () => {
 const doTrading = async (clobClient: ClobClient) => {
     for (const trade of temp_trades) {
         console.log('Trade to copy:', trade);
+
+        // Check if TITLE_FILTER is set and if the trade title includes it
+        if (ENV.TITLE_FILTER && ENV.TITLE_FILTER.trim() !== '') {
+            const filterText = ENV.TITLE_FILTER.toLowerCase();
+            const tradeTitle = (trade.title || '').toLowerCase();
+
+            if (!tradeTitle.includes(filterText)) {
+                console.log(`Skipping trade: Title "${trade.title}" does not contain filter "${ENV.TITLE_FILTER}"`);
+
+                // Mark as processed so we don't pick it up again
+                await UserActivity.updateOne(
+                    { _id: trade._id },
+                    {
+                        bot: true, // Mark as processed by bot
+                        botExcutedTime: 100 // Set high retry count to prevent future retries
+                    }
+                );
+                continue;
+            }
+        }
+
         // const market = await clobClient.getMarket(trade.conditionId);
         const my_positions: UserPositionInterface[] = await fetchData(
             `https://data-api.polymarket.com/positions?user=${PROXY_WALLET}`

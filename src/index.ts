@@ -30,6 +30,9 @@ export const main = async () => {
             ratio = myBalance / targetBalance;
             console.log(`Trading Ratio:       ${ratio.toFixed(4)}`);
             console.log(`Trade Scale:         ${TRADE_SCALE.toFixed(2)}x`);
+            console.log(`Max Trade Amount:    $${ENV.MAX_TRADE_AMOUNT.toFixed(2)}`);
+            console.log(`Title Filter:        ${ENV.TITLE_FILTER || 'NONE'}`);
+            console.log(`Exact Match Mode:    ${ENV.TRADE_EXACT ? 'ON' : 'OFF'}`);
             console.log(`Effective Multiplier: ${(ratio * TRADE_SCALE).toFixed(4)}`);
         } else {
             console.log(`Trading Ratio:       N/A (Target balance is 0)`);
@@ -60,18 +63,20 @@ export const main = async () => {
                     let myEst = "";
                     if (ratio > 0) {
                         // Estimate my share size and cost
-                        const rawCost = trade.usdcSize * ratio * TRADE_SCALE;
+                        let rawCost = 0;
+                        if (ENV.TRADE_EXACT) {
+                            rawCost = trade.usdcSize;
+                        } else {
+                            rawCost = trade.usdcSize * ratio * TRADE_SCALE;
+                        }
+
                         let myCost = rawCost;
                         let cappedMsg = "";
-
                         if (rawCost > ENV.MAX_TRADE_AMOUNT) {
                             myCost = ENV.MAX_TRADE_AMOUNT;
                             cappedMsg = " (CAPPED)";
                         }
-
-                        // Recalculate size based on capped cost
                         const mySize = (myCost / trade.price).toFixed(2);
-
                         myEst = ` | My Est: ${mySize} shares (~$${myCost.toFixed(2)}${cappedMsg})`;
                     }
                     console.log(`[${time}] ${trade.side} ${trade.size} ${trade.asset} @ ${trade.price}${myEst}`);

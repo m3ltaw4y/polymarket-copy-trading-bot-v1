@@ -40,4 +40,6 @@ export const ENV = {
     USDC_CONTRACT_ADDRESS: process.env.USDC_CONTRACT_ADDRESS as string,
     TRADE_SCALE: parseFloat(process.env.TRADE_SCALE || '1'),
     MAX_TRADE_AMOUNT: parseFloat(process.env.MAX_TRADE_AMOUNT || '10'),
+    TITLE_FILTER: process.env.TITLE_FILTER || '',
+    TRADE_EXACT: process.env.TRADE_EXACT === '1',
 };
