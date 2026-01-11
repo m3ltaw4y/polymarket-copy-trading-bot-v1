@@ -18,7 +18,16 @@ const UserActivity = getUserActivityModel(USER_ADDRESS);
 const readTempTrade = async () => {
     temp_trades = (
         await UserActivity.find({
-            $and: [{ type: 'TRADE' }, { bot: false }, { botExcutedTime: { $lt: RETRY_LIMIT } }],
+            $and: [
+                { type: 'TRADE' },
+                { bot: false },
+                {
+                    $or: [
+                        { botExcutedTime: { $exists: false } }, // New trades without botExcutedTime
+                        { botExcutedTime: { $lt: RETRY_LIMIT } } // Retryable failed trades
+                    ]
+                }
+            ],
         }).exec()
     ).map((trade) => trade as UserActivityInterface);
 };
