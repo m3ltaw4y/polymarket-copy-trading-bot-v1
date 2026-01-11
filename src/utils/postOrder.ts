@@ -20,7 +20,9 @@ const postOrder = async (
 ) => {
     //Merge strategy
     if (condition === 'merge') {
-        console.log('Merging Strategy...');
+        if (!ENV.LOG_ONLY_SUCCESS) {
+            console.log('Merging Strategy...');
+        }
         if (!my_position) {
             console.log('my_position is undefined');
             await UserActivity.updateOne({ _id: trade._id }, { bot: true });
@@ -40,7 +42,15 @@ const postOrder = async (
                 return parseFloat(bid.price) > parseFloat(max.price) ? bid : max;
             }, orderBook.bids[0]);
 
-            console.log('Max price bid:', maxPriceBid);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('Max price bid:', maxPriceBid);
+            }
+            const currentPriceMerge = parseFloat(maxPriceBid.price);
+            if (Math.abs(currentPriceMerge - trade.price) > ENV.MAX_PRICE_DIFF) {
+                console.log(`Price difference too large: current ${currentPriceMerge}, target ${trade.price} (diff ${Math.abs(currentPriceMerge - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
+                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                break;
+            }
             let order_arges;
             if (remaining <= parseFloat(maxPriceBid.size)) {
                 order_arges = {
@@ -57,7 +67,9 @@ const postOrder = async (
                     price: parseFloat(maxPriceBid.price),
                 };
             }
-            console.log('Order args:', order_arges);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('Order args:', order_arges);
+            }
             const signedOrder = await clobClient.createMarketOrder(order_arges);
             const resp = await clobClient.postOrder(signedOrder, OrderType.FOK);
             if (resp.success === true) {
@@ -78,19 +90,27 @@ const postOrder = async (
             await UserActivity.updateOne({ _id: trade._id }, { bot: true });
         }
     } else if (condition === 'buy') {       //Buy strategy
-        console.log(`Buy Strategy (Scale: ${TRADE_SCALE})...`);
+        if (!ENV.LOG_ONLY_SUCCESS) {
+            console.log(`Buy Strategy (Scale: ${TRADE_SCALE})...`);
+        }
         const ratio = my_balance / (user_balance + trade.usdcSize);
-        console.log('ratio', ratio);
+        if (!ENV.LOG_ONLY_SUCCESS) {
+            console.log('ratio', ratio);
+        }
 
         // Calculate raw amount
         // Calculate amount based on strategy
         let calculatedAmount = 0;
         if (ENV.TRADE_EXACT) {
             calculatedAmount = trade.usdcSize * TRADE_SCALE;
-            console.log(`[EXACT MODE] Scaled trade size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${TRADE_SCALE})`);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log(`[EXACT MODE] Scaled trade size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${TRADE_SCALE})`);
+            }
         } else {
             calculatedAmount = trade.usdcSize * ratio * TRADE_SCALE;
-            console.log(`[SCALE MODE] Proportional size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${ratio.toFixed(4)} * ${TRADE_SCALE})`);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log(`[SCALE MODE] Proportional size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${ratio.toFixed(4)} * ${TRADE_SCALE})`);
+            }
         }
 
         // Apply Cap
@@ -115,8 +135,9 @@ const postOrder = async (
             }, orderBook.asks[0]);
 
             console.log('Min price ask:', minPriceAsk);
-            if (parseFloat(minPriceAsk.price) - ENV.MAX_PRICE_DIFF > trade.price) {
-                console.log(`Price difference too large (${(parseFloat(minPriceAsk.price) - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
+            const currentPriceBuy = parseFloat(minPriceAsk.price);
+            if (Math.abs(currentPriceBuy - trade.price) > ENV.MAX_PRICE_DIFF) {
+                console.log(`Price difference too large: current ${currentPriceBuy}, target ${trade.price} (diff ${Math.abs(currentPriceBuy - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
                 await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 break;
             }
@@ -136,7 +157,9 @@ const postOrder = async (
                     price: parseFloat(minPriceAsk.price),
                 };
             }
-            console.log('Order args:', order_arges);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('Order args:', order_arges);
+            }
             const signedOrder = await clobClient.createMarketOrder(order_arges);
             const resp = await clobClient.postOrder(signedOrder, OrderType.FOK);
             if (resp.success === true) {
@@ -157,7 +180,9 @@ const postOrder = async (
             await UserActivity.updateOne({ _id: trade._id }, { bot: true });
         }
     } else if (condition === 'sell') {          //Sell strategy
-        console.log(`Sell Strategy (Scale: ${TRADE_SCALE})...`);
+        if (!ENV.LOG_ONLY_SUCCESS) {
+            console.log(`Sell Strategy (Scale: ${TRADE_SCALE})...`);
+        }
         let remaining = 0;
         if (!my_position) {
             console.log('No position to sell');
@@ -166,7 +191,9 @@ const postOrder = async (
             remaining = my_position.size;
         } else {
             const ratio = trade.size / (user_position.size + trade.size);
-            console.log('ratio', ratio);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('ratio', ratio);
+            }
             // Apply scale but clamp to available position size
             const calculatedSell = my_position.size * ratio * TRADE_SCALE;
             remaining = Math.min(calculatedSell, my_position.size);
@@ -184,7 +211,15 @@ const postOrder = async (
                 return parseFloat(bid.price) > parseFloat(max.price) ? bid : max;
             }, orderBook.bids[0]);
 
-            console.log('Max price bid:', maxPriceBid);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('Max price bid:', maxPriceBid);
+            }
+            const currentPriceSell = parseFloat(maxPriceBid.price);
+            if (Math.abs(currentPriceSell - trade.price) > ENV.MAX_PRICE_DIFF) {
+                console.log(`Price difference too large: current ${currentPriceSell}, target ${trade.price} (diff ${Math.abs(currentPriceSell - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
+                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                break;
+            }
             let order_arges;
             if (remaining <= parseFloat(maxPriceBid.size)) {
                 order_arges = {
@@ -201,7 +236,9 @@ const postOrder = async (
                     price: parseFloat(maxPriceBid.price),
                 };
             }
-            console.log('Order args:', order_arges);
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('Order args:', order_arges);
+            }
             const signedOrder = await clobClient.createMarketOrder(order_arges);
             const resp = await clobClient.postOrder(signedOrder, OrderType.FOK);
             if (resp.success === true) {

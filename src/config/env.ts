@@ -43,4 +43,5 @@ export const ENV = {
     TITLE_FILTER: (process.env.TITLE_FILTER || '').split('#')[0].trim(),
     TRADE_EXACT: (process.env.TRADE_EXACT || '').trim().startsWith('1'),
     MAX_PRICE_DIFF: parseFloat(process.env.MAX_PRICE_DIFF || '0'),
+    LOG_ONLY_SUCCESS: (process.env.LOG_ONLY_SUCCESS || '').trim().startsWith('1'),
 };

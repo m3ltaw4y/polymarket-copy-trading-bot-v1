@@ -34,7 +34,9 @@ const readTempTrade = async () => {
 
 const doTrading = async (clobClient: ClobClient) => {
     for (const trade of temp_trades) {
-        console.log('Trade to copy:', trade);
+        if (!ENV.LOG_ONLY_SUCCESS) {
+            console.log('Trade to copy:', trade);
+        }
 
         // Check if TITLE_FILTER is set and if the trade title includes it
         if (ENV.TITLE_FILTER && ENV.TITLE_FILTER.trim() !== '') {
