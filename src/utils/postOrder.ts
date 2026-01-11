@@ -115,8 +115,8 @@ const postOrder = async (
             }, orderBook.asks[0]);
 
             console.log('Min price ask:', minPriceAsk);
-            if (parseFloat(minPriceAsk.price) - 0.05 > trade.price) {
-                console.log('Too big different price - do not copy');
+            if (parseFloat(minPriceAsk.price) - ENV.MAX_PRICE_DIFF > trade.price) {
+                console.log(`Price difference too large (${(parseFloat(minPriceAsk.price) - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
                 await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 break;
             }
