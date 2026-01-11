@@ -28,7 +28,15 @@ const fetchTradeData = async () => {
         const activities = await fetchData(url);
 
         if (Array.isArray(activities)) {
+            const now = Math.floor(Date.now() / 1000);
+            const threshold = now - (TOO_OLD_TIMESTAMP * 60);
+
             for (const activity of activities) {
+                // Filter by timestamp: Only process if trade is within the allowed timeframe
+                if (activity.timestamp < threshold) {
+                    continue; // Skip trades that are too old
+                }
+
                 // Check if trade already exists
                 const exists = await UserActivity.findOne({ transactionHash: activity.transactionHash });
                 if (!exists) {
