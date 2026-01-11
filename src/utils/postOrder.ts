@@ -83,8 +83,8 @@ const postOrder = async (
         // Calculate amount based on strategy
         let calculatedAmount = 0;
         if (ENV.TRADE_EXACT) {
-            calculatedAmount = trade.usdcSize;
-            console.log(`[EXACT MODE] Copying trade size: $${calculatedAmount.toFixed(2)}`);
+            calculatedAmount = trade.usdcSize * TRADE_SCALE;
+            console.log(`[EXACT MODE] Scaled trade size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${TRADE_SCALE})`);
         } else {
             calculatedAmount = trade.usdcSize * ratio * TRADE_SCALE;
             console.log(`[SCALE MODE] Proportional size: $${calculatedAmount.toFixed(2)} (${trade.usdcSize} * ${ratio.toFixed(4)} * ${TRADE_SCALE})`);

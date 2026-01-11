@@ -65,7 +65,7 @@ export const main = async () => {
                         // Estimate my share size and cost
                         let rawCost = 0;
                         if (ENV.TRADE_EXACT) {
-                            rawCost = trade.usdcSize;
+                            rawCost = trade.usdcSize * TRADE_SCALE;
                         } else {
                             rawCost = trade.usdcSize * ratio * TRADE_SCALE;
                         }
