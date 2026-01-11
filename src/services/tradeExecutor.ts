@@ -137,7 +137,7 @@ const doTrading = async (clobClient: ClobClient) => {
     }
 };
 
-const resolveMarketPositions = async () => {
+const resolveMarketPositions = async (clobClient: ClobClient) => {
     // Filter out positions that are closed or missing conditionId
     const activePositions = await DryRunPosition.find({
         isClosed: { $ne: true },
@@ -146,45 +146,29 @@ const resolveMarketPositions = async () => {
 
     if (activePositions.length === 0) return;
 
+    console.log(`[DRY RUN] Checking resolution for ${activePositions.length} active positions via CLOB...`);
+
     // Group by conditionId to minimize API calls
     const marketIds = [...new Set(activePositions.map((p) => p.conditionId))].filter(id => !!id);
 
     for (const conditionId of marketIds) {
         try {
-            // Try condition_id parameter
-            const url = `https://gamma-api.polymarket.com/markets?condition_id=${conditionId}`;
-            const markets = await fetchData(url);
-            if (!markets || !Array.isArray(markets) || markets.length === 0) continue;
+            const clobMarket = await clobClient.getMarket(conditionId);
+            if (!clobMarket) continue;
 
-            const market = markets.find(m => m.conditionId === conditionId || m.condition_id === conditionId);
-            if (!market) continue;
-
-            // Apply TITLE_FILTER to resolution logic as well
-            if (ENV.TITLE_FILTER && ENV.TITLE_FILTER.trim() !== '') {
-                const filterText = ENV.TITLE_FILTER.toLowerCase();
-                const marketTitle = (market.question || '').toLowerCase();
-                if (!marketTitle.includes(filterText)) continue;
-            }
-
-            // aggressive check: if not active OR closed=true OR disputed=true
-            const isResolved = market.closed === true || market.active === false || market.disputed === true;
+            // Aggressive check: IF active is false OR closed is true
+            const isResolved = clobMarket.closed === true || clobMarket.active === false;
 
             if (isResolved) {
-                console.log(`\n[DRY RUN] Market Ended/Disputed (ID: ${conditionId}): ${market.question || 'Unknown Market'}`);
-                console.log(`Status: ${market.closed ? 'Closed' : (market.disputed ? 'Disputed' : 'Inactive')}`);
-
-                // Determine winning outcome index if possible
-                let prices = market.outcomePrices;
-                if (typeof prices === 'string') {
-                    try { prices = JSON.parse(prices); } catch (e) { prices = [prices]; }
-                }
-
-                const winningIndex = Array.isArray(prices) ? prices.findIndex((p: any) => p === "1" || p === "1.0" || p === 1) : -1;
+                console.log(`\n[DRY RUN] Market Ended (ID: ${conditionId}): ${clobMarket.question || 'Unknown Market'}`);
 
                 const marketPositions = activePositions.filter((p) => p.conditionId === conditionId);
 
-                if (winningIndex !== -1 && market.outcomes) {
-                    const winningOutcome = market.outcomes[winningIndex];
+                // Find winning outcome from tokens
+                const winners = clobMarket.tokens.filter((t: any) => t.winner === true);
+
+                if (winners.length > 0) {
+                    const winningOutcome = winners[0].outcome; // Usually 'Up' or 'Down' or 'Yes' or 'No'
                     console.log(`Winning Outcome: ${winningOutcome}`);
 
                     for (const p of marketPositions) {
@@ -192,20 +176,19 @@ const resolveMarketPositions = async () => {
                         p.totalReturn = won ? p.totalShares : 0;
                         p.isClosed = true;
                         await p.save();
+                        console.log(`  - Position ${p.outcome}: ${won ? '🏆 WON' : '❌ LOST'}`);
                     }
                 } else {
-                    console.log(`No clear winner found yet (Dispute period?). Reporting current valuation.`);
+                    console.log(`No winner declared yet in CLOB. Reporting current valuation if closed.`);
                     for (const p of marketPositions) {
-                        // Use current price for valuation if winner not set
-                        const currentWeight = Array.isArray(prices) ? parseFloat(prices[market.outcomes.indexOf(p.outcome)]) || 0 : 0;
-                        p.totalReturn = p.totalShares * currentWeight;
+                        p.totalReturn = 0;
                         p.isClosed = true;
                         await p.save();
                     }
                 }
 
                 // Print final summary
-                await checkAndPrintSummary(market.question || 'Resolved Market', undefined, conditionId);
+                await checkAndPrintSummary(clobMarket.question || 'Resolved Market', undefined, conditionId);
             }
         } catch (error) {
             console.error(`Error resolving market ${conditionId}:`, error);
@@ -230,7 +213,7 @@ const printOpenPositionsStatus = async () => {
     for (const title in groups) {
         console.log(`Market: ${title}`);
         groups[title].forEach(p => {
-            console.log(`  - ${p.outcome}: Spent $${p.totalSpend.toFixed(2)} (${p.totalShares.toFixed(2)} shares @ $${p.avgPrice.toFixed(4)})`);
+            console.log(`  - ${p.outcome}: Spent $${p.totalSpend.toFixed(2)} (${p.totalShares.toFixed(2)} shares | avg price: $${p.avgPrice.toFixed(4)})`);
         });
     }
     console.log('--------------------------------------------------\n');
@@ -298,8 +281,8 @@ const tradeExcutor = async (clobClient: ClobClient) => {
 
         // Periodically check for market resolution and print status in Dry Run mode
         if (ENV.DRY_RUN && (Date.now() - lastResolveCheck > 60000)) {
+            await resolveMarketPositions(clobClient);
             await printOpenPositionsStatus();
-            await resolveMarketPositions();
             lastResolveCheck = Date.now();
         }
 
