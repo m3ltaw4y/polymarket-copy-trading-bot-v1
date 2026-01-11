@@ -62,7 +62,7 @@ const doTrading = async (clobClient: ClobClient) => {
         // const market = await clobClient.getMarket(trade.conditionId);
         let my_positions: UserPositionInterface[] = [];
         if (ENV.DRY_RUN) {
-            const simulatedPos = await DryRunPosition.findOne({ title: trade.title, outcome: trade.outcome });
+            const simulatedPos = await DryRunPosition.findOne({ conditionId: trade.conditionId, outcome: trade.outcome });
             if (simulatedPos) {
                 my_positions = [
                     {
@@ -151,11 +151,16 @@ const resolveMarketPositions = async () => {
 
     for (const conditionId of marketIds) {
         try {
+            // Try conditionId parameter (most common in modern Gamma API)
             const url = `https://gamma-api.polymarket.com/markets?condition_id=${conditionId}`;
             const markets = await fetchData(url);
-            if (!markets || markets.length === 0) continue;
+            if (!markets || !Array.isArray(markets) || markets.length === 0) continue;
 
-            const market = markets[0];
+            const market = markets.find(m => m.conditionId === conditionId || m.condition_id === conditionId);
+            if (!market) {
+                // Not found or ID mismatch (preventing generic Joe Biden fallback)
+                continue;
+            }
 
             // Apply TITLE_FILTER to resolution logic as well
             if (ENV.TITLE_FILTER && ENV.TITLE_FILTER.trim() !== '') {
@@ -167,7 +172,7 @@ const resolveMarketPositions = async () => {
             }
 
             if (market.closed === true) {
-                console.log(`\n[DRY RUN] Market Resolved: ${market.question || 'Unknown Market'}`);
+                console.log(`\n[DRY RUN] Market Resolved (ID: ${conditionId}): ${market.question || 'Unknown Market'}`);
 
                 // Determine winning outcome index
                 // Note: outcomePrices can sometimes be a stringified array in certain API versions
