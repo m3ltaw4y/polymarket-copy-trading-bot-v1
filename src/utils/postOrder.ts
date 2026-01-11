@@ -62,6 +62,9 @@ const postOrder = async (
             const resp = await clobClient.postOrder(signedOrder, OrderType.FOK);
             if (resp.success === true) {
                 retry = 0;
+                const priceDiff = order_arges.price - trade.price;
+                const timeDiff = Math.floor(Date.now() / 1000) - trade.timestamp;
+                console.log(`[SUCCESS] Merge Order placed! Price Diff: ${priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(4)}, Time Diff: ${timeDiff}s`);
                 console.log('Successfully posted order:', resp);
                 remaining -= order_arges.amount;
             } else {
@@ -138,6 +141,9 @@ const postOrder = async (
             const resp = await clobClient.postOrder(signedOrder, OrderType.FOK);
             if (resp.success === true) {
                 retry = 0;
+                const priceDiff = order_arges.price - trade.price;
+                const timeDiff = Math.floor(Date.now() / 1000) - trade.timestamp;
+                console.log(`[SUCCESS] Buy Order placed! Price Diff: ${priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(4)}, Time Diff: ${timeDiff}s`);
                 console.log('Successfully posted order:', resp);
                 remaining -= order_arges.amount;
             } else {
@@ -200,6 +206,9 @@ const postOrder = async (
             const resp = await clobClient.postOrder(signedOrder, OrderType.FOK);
             if (resp.success === true) {
                 retry = 0;
+                const priceDiff = order_arges.price - trade.price;
+                const timeDiff = Math.floor(Date.now() / 1000) - trade.timestamp;
+                console.log(`[SUCCESS] Sell Order placed! Price Diff: ${priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(4)}, Time Diff: ${timeDiff}s`);
                 console.log('Successfully posted order:', resp);
                 remaining -= order_arges.amount;
             } else {
