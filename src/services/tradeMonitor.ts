@@ -3,11 +3,13 @@ import { ENV } from '../config/env';
 import { UserActivityInterface, UserPositionInterface } from '../interfaces/User';
 import { getUserActivityModel, getUserPositionModel } from '../models/userHistory';
 import fetchData from '../utils/fetchData';
+import { tradeEventEmitter } from '../utils/eventEmitter';
 
 const USER_ADDRESS = ENV.USER_ADDRESS;
 const TOO_OLD_TIMESTAMP = ENV.TOO_OLD_TIMESTAMP;
 const FETCH_INTERVAL = ENV.FETCH_INTERVAL;
 const PROXY_WALLET = ENV.PROXY_WALLET;
+const TITLE_FILTER = ENV.TITLE_FILTER;
 
 if (!USER_ADDRESS) {
     throw new Error('USER_ADDRESS is not defined');
@@ -32,24 +34,35 @@ const fetchTradeData = async () => {
             const threshold = now - (TOO_OLD_TIMESTAMP * 60);
 
             for (const activity of activities) {
-                // Filter by timestamp: Only process if trade is within the allowed timeframe
+                // Filter by timestamp
                 if (activity.timestamp < threshold) {
-                    continue; // Skip trades that are too old
+                    continue;
                 }
 
-                // Check if trade already exists
                 const exists = await UserActivity.findOne({ transactionHash: activity.transactionHash });
                 if (!exists) {
                     console.log(`Found new trade: ${activity.transactionHash}`);
-                    // Map API response to our schema if necessary, or just save if it matches
-                    // Assuming activity structure matches or is compatible enough for now
-                    // We explicitly mark bot: false so the executor knows to copy it
+
+                    // Apply TITLE_FILTER
+                    let shouldCopy = true;
+                    if (TITLE_FILTER && !activity.title.toLowerCase().includes(TITLE_FILTER.toLowerCase())) {
+                        shouldCopy = false;
+                        if (!ENV.LOG_ONLY_SUCCESS) {
+                            console.log(`[FILTER] Skipping trade for "${activity.title}" (does not match filter)`);
+                        }
+                    }
+
                     const newTrade = new UserActivity({
                         ...activity,
-                        bot: false,
-                        proxyWallet: PROXY_WALLET, // Tag with our proxy wallet context if needed
+                        bot: !shouldCopy, // Mark as bot: true if we shouldn't copy it
+                        proxyWallet: PROXY_WALLET,
                     });
                     await newTrade.save();
+
+                    if (shouldCopy) {
+                        // Emit event to trigger executor immediately
+                        tradeEventEmitter.emit('newTrade');
+                    }
                 }
             }
         }
@@ -59,11 +72,17 @@ const fetchTradeData = async () => {
 };
 
 const tradeMonitor = async () => {
-    console.log('Trade Monitor is running every', FETCH_INTERVAL, 'seconds');
-    await init();    //Load my oders before sever downs
+    // Polling interval from ENV (default 1s)
+    const intervalMs = Math.max(100, (FETCH_INTERVAL || 1) * 1000);
+    console.log(`Trade Monitor is running every ${intervalMs}ms`);
+
+    await init();
     while (true) {
-        await fetchTradeData();     //Fetch all user activities
-        await new Promise((resolve) => setTimeout(resolve, FETCH_INTERVAL * 1000));     //Fetch user activities every second
+        const startTime = Date.now();
+        await fetchTradeData();
+        const duration = Date.now() - startTime;
+        const waitTime = Math.max(100, intervalMs - duration);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
 };
 

@@ -1,12 +1,13 @@
 import { ClobClient } from '@polymarket/clob-client';
 import { UserActivityInterface, UserPositionInterface } from '../interfaces/User';
 import { ENV } from '../config/env';
-import { getUserActivityModel } from '../models/userHistory';
+import { getUserActivityModel, getUserPositionModel } from '../models/userHistory';
 import { DryRunPosition } from '../models/dryRun';
 import fetchData from '../utils/fetchData';
 import spinner from '../utils/spinner';
 import getMyBalance from '../utils/getMyBalance';
 import postOrder from '../utils/postOrder';
+import { tradeEventEmitter } from '../utils/eventEmitter';
 
 const USER_ADDRESS = ENV.USER_ADDRESS;
 const RETRY_LIMIT = ENV.RETRY_LIMIT;
@@ -15,22 +16,28 @@ const PROXY_WALLET = ENV.PROXY_WALLET;
 let temp_trades: UserActivityInterface[] = [];
 
 const UserActivity = getUserActivityModel(USER_ADDRESS);
+const UserPosition = getUserPositionModel(USER_ADDRESS);
+const MyPosition = getUserPositionModel(PROXY_WALLET);
 
 const readTempTrade = async () => {
-    temp_trades = (
-        await UserActivity.find({
-            $and: [
-                { type: 'TRADE' },
-                { bot: false },
-                {
-                    $or: [
-                        { botExcutedTime: { $exists: false } }, // New trades without botExcutedTime
-                        { botExcutedTime: { $lt: RETRY_LIMIT } } // Retryable failed trades
-                    ]
-                }
-            ],
-        }).exec()
-    ).map((trade) => trade as UserActivityInterface);
+    const query: any = {
+        $and: [
+            { type: 'TRADE' },
+            { bot: false },
+            {
+                $or: [
+                    { botExcutedTime: { $exists: false } },
+                    { botExcutedTime: { $lt: RETRY_LIMIT } }
+                ]
+            }
+        ],
+    };
+
+    if (ENV.TITLE_FILTER) {
+        query.$and.push({ title: { $regex: ENV.TITLE_FILTER, $options: 'i' } });
+    }
+
+    temp_trades = (await UserActivity.find(query).exec()).map((trade) => trade as UserActivityInterface);
 };
 
 const doTrading = async (clobClient: ClobClient) => {
@@ -39,116 +46,60 @@ const doTrading = async (clobClient: ClobClient) => {
             console.log('Trade to copy:', trade);
         }
 
-        // Check if TITLE_FILTER is set and if the trade title includes it
-        if (ENV.TITLE_FILTER && ENV.TITLE_FILTER.trim() !== '') {
-            const filterText = ENV.TITLE_FILTER.toLowerCase();
-            const tradeTitle = (trade.title || '').toLowerCase();
-
-            if (!tradeTitle.includes(filterText)) {
-                console.log(`Skipping trade: Title "${trade.title}" does not contain filter "${ENV.TITLE_FILTER}"`);
-
-                // Mark as processed so we don't pick it up again
-                await UserActivity.updateOne(
-                    { _id: trade._id },
-                    {
-                        bot: true, // Mark as processed by bot
-                        botExcutedTime: 100 // Set high retry count to prevent future retries
-                    }
-                );
-                continue;
-            }
-        }
-
-        // const market = await clobClient.getMarket(trade.conditionId);
-        let my_positions: UserPositionInterface[] = [];
-        if (ENV.DRY_RUN) {
-            const simulatedPos = await DryRunPosition.findOne({ conditionId: trade.conditionId, outcome: trade.outcome });
-            if (simulatedPos) {
-                my_positions = [
-                    {
-                        conditionId: trade.conditionId,
-                        asset: trade.asset,
-                        size: simulatedPos.totalShares,
-                    } as any,
-                ];
-            }
-        } else {
-            my_positions = await fetchData(`https://data-api.polymarket.com/positions?user=${PROXY_WALLET}`);
-        }
-
-        const user_positions: UserPositionInterface[] = await fetchData(
-            `https://data-api.polymarket.com/positions?user=${USER_ADDRESS}`
-        );
-        const my_position = my_positions.find(
-            (position: UserPositionInterface) => position.conditionId === trade.conditionId
-        );
-        const user_position = user_positions.find(
-            (position: UserPositionInterface) => position.conditionId === trade.conditionId
-        );
-        let my_balance = 0;
-        let user_balance = 0;
+        let my_position: UserPositionInterface | undefined;
+        let user_position: UserPositionInterface | undefined;
+        let my_balance = 1000000;
+        let user_balance = 1000000;
 
         if (!ENV.DRY_RUN) {
             try {
                 my_balance = await getMyBalance(PROXY_WALLET);
                 user_balance = await getMyBalance(USER_ADDRESS);
+                my_position = (await MyPosition.findOne({ asset: trade.asset })) as any;
+                user_position = (await UserPosition.findOne({ asset: trade.asset })) as any;
             } catch (error) {
-                console.error(`Error fetching balances from RPC:`, error);
-                console.log(`Skipping trade due to RPC failure.`);
+                console.error('Failed to fetch balance or position:', error instanceof Error ? error.message : error);
+                await UserActivity.updateOne({ _id: trade._id }, { $inc: { botExcutedTime: 1 } });
                 continue;
             }
-            console.log('My current balance:', my_balance);
-            console.log('User current balance:', user_balance);
-        } else {
-            // For Dry Run, we use dummy balances
-            my_balance = 1000000;
-            user_balance = 1000000;
         }
 
-        if (ENV.DRY_RUN) {
-            // Dry Run: Only simulate BUY orders
-            if (trade.side === 'BUY') {
-                await postOrder(
-                    clobClient,
-                    trade.side.toLowerCase(),
-                    my_position,
-                    user_position,
-                    trade,
-                    my_balance,
-                    user_balance
-                );
-            } else {
-                console.log(`[DRY RUN] Skipping copying ${trade.side} for ${trade.title}. Market resolution will be tracked separately.`);
-                // Mark as processed so we don't pick it up again
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+        const condition = trade.side.toLowerCase();
+
+        if (condition === 'buy' || condition === 'sell' || condition === 'merge') {
+            try {
+                if (ENV.DRY_RUN && condition === 'sell') {
+                    console.log(`[DRY RUN] Skipping SELL trade for ${trade.title} (resolving markets handles this)`);
+                    await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                } else if (ENV.DRY_RUN && condition === 'merge') {
+                    await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                } else {
+                    await postOrder(clobClient, condition, my_position, user_position, trade, my_balance, user_balance);
+                }
+            } catch (error) {
+                console.error(`Error processing trade ${trade.transactionHash}:`, error instanceof Error ? error.message : error);
+                await UserActivity.updateOne({ _id: trade._id }, { $inc: { botExcutedTime: 1 } });
             }
-        } else {
-            // Live mode: process all supported conditions
-            await postOrder(
-                clobClient,
-                trade.side.toLowerCase(),
-                my_position,
-                user_position,
-                trade,
-                my_balance,
-                user_balance
-            );
         }
     }
 };
 
 const resolveMarketPositions = async (clobClient: ClobClient) => {
-    // Filter out positions that are closed or missing conditionId
-    const activePositions = await DryRunPosition.find({
+    const query: any = {
         isClosed: { $ne: true },
         conditionId: { $exists: true, $ne: null }
-    });
+    };
+    if (ENV.TITLE_FILTER) {
+        query.title = { $regex: ENV.TITLE_FILTER, $options: 'i' };
+    }
+    const activePositions = await DryRunPosition.find(query);
 
     if (activePositions.length === 0) return;
 
-    console.log(`[DRY RUN] Checking resolution for ${activePositions.length} active positions via CLOB...`);
+    if (!ENV.LOG_ONLY_SUCCESS) {
+        console.log(`[DRY RUN] Checking resolution for ${activePositions.length} active positions via CLOB...`);
+    }
 
-    // Group by conditionId to minimize API calls
     const marketIds = [...new Set(activePositions.map((p) => p.conditionId))].filter(id => !!id);
 
     for (const conditionId of marketIds) {
@@ -156,19 +107,16 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
             const clobMarket = await clobClient.getMarket(conditionId);
             if (!clobMarket) continue;
 
-            // Aggressive check: IF active is false OR closed is true
             const isResolved = clobMarket.closed === true || clobMarket.active === false;
 
             if (isResolved) {
                 console.log(`\n[DRY RUN] Market Ended (ID: ${conditionId}): ${clobMarket.question || 'Unknown Market'}`);
 
                 const marketPositions = activePositions.filter((p) => p.conditionId === conditionId);
-
-                // Find winning outcome from tokens
                 const winners = clobMarket.tokens.filter((t: any) => t.winner === true);
 
                 if (winners.length > 0) {
-                    const winningOutcome = winners[0].outcome; // Usually 'Up' or 'Down' or 'Yes' or 'No'
+                    const winningOutcome = winners[0].outcome;
                     console.log(`Winning Outcome: ${winningOutcome}`);
 
                     for (const p of marketPositions) {
@@ -179,15 +127,13 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
                         console.log(`  - Position ${p.outcome}: ${won ? '🏆 WON' : '❌ LOST'}`);
                     }
                 } else {
-                    console.log(`No winner declared yet in CLOB. Reporting current valuation if closed.`);
+                    console.log(`No winner declared yet in CLOB. Marking as closed (payout TBD).`);
                     for (const p of marketPositions) {
                         p.totalReturn = 0;
                         p.isClosed = true;
                         await p.save();
                     }
                 }
-
-                // Print final summary
                 await checkAndPrintSummary(clobMarket.question || 'Resolved Market', undefined, conditionId);
             }
         } catch (error: any) {
@@ -197,13 +143,16 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
 };
 
 const printOpenPositionsStatus = async () => {
-    const activePositions = await DryRunPosition.find({ isClosed: false });
+    const query: any = { isClosed: false };
+    if (ENV.TITLE_FILTER) {
+        query.title = { $regex: ENV.TITLE_FILTER, $options: 'i' };
+    }
+    const activePositions = await DryRunPosition.find(query);
     if (activePositions.length === 0) return;
 
     console.log('\n--------------------------------------------------');
     console.log(`🕒 [DRY RUN STATUS] Open Positions (${new Date().toLocaleTimeString()})`);
 
-    // Group by title for cleaner output
     const groups: { [key: string]: typeof activePositions } = {};
     activePositions.forEach(p => {
         if (!groups[p.title]) groups[p.title] = [];
@@ -237,19 +186,13 @@ const checkAndPrintSummary = async (title: string, exitPrice?: number, condition
     let totalTargetReturnAll = 0;
 
     for (const p of positions) {
-        // Returns are based on totalReturn (calculated in resolveMarketPositions)
-        // or totalShares * exitPrice (if triggered by target sell)
         const botReturn = exitPrice !== undefined ? p.totalShares * exitPrice : p.totalReturn;
         const botPnL = botReturn - p.totalSpend;
         const botPnLPercent = p.totalSpend > 0 ? (botPnL / p.totalSpend) * 100 : 0;
 
-        // Calculate Target PNL as well
-        // For target, return is also shares * exitPrice or shares * 1/0
         const isResolution = exitPrice === undefined;
         let targetReturn = 0;
         if (isResolution) {
-            // If p.totalReturn > 0 means it won (it's equal to totalShares)
-            // So for target, return is 1 * targetTotalShares
             targetReturn = p.totalReturn > 0 ? p.targetTotalShares : 0;
         } else {
             targetReturn = p.targetTotalShares * exitPrice!;
@@ -271,7 +214,6 @@ const checkAndPrintSummary = async (title: string, exitPrice?: number, condition
         console.log(`  Return:      $${botReturn.toFixed(2)}`);
         console.log(`  PnL:         $${botPnL.toFixed(2)} (${botPnLPercent.toFixed(2)}%)`);
 
-        // Slippage Analysis
         const priceDiff = p.avgPrice - p.targetAvgPrice;
         const slippagePercent = p.targetAvgPrice > 0 ? (priceDiff / p.targetAvgPrice) * 100 : 0;
         console.log(`  --- SLIPPAGE ANALYSIS ---`);
@@ -299,20 +241,38 @@ const checkAndPrintSummary = async (title: string, exitPrice?: number, condition
     console.log('==================================================\n');
 };
 
-const tradeExcutor = async (clobClient: ClobClient) => {
-    console.log(`Executing Copy Trading`);
+let isTrading = false;
 
-    let lastResolveCheck = 0;
-
-    while (true) {
+const triggerTrading = async (clobClient: ClobClient) => {
+    if (isTrading) return;
+    isTrading = true;
+    try {
         await readTempTrade();
         if (temp_trades.length > 0) {
             console.log('💥 New transactions found 💥');
             spinner.stop();
             await doTrading(clobClient);
-        } else {
-            spinner.start('Waiting for new transactions');
         }
+    } catch (e) {
+        console.error('Error in triggerTrading:', e);
+    } finally {
+        isTrading = false;
+    }
+};
+
+const tradeExecutor = async (clobClient: ClobClient) => {
+    console.log(`Executor initialized. Waiting for trades...`);
+
+    // Listen for immediate events from monitor
+    tradeEventEmitter.on('newTrade', () => {
+        triggerTrading(clobClient);
+    });
+
+    let lastResolveCheck = 0;
+
+    while (true) {
+        // Fallback check every loop iteration (1s)
+        await triggerTrading(clobClient);
 
         // Periodically check for market resolution and print status in Dry Run mode
         if (ENV.DRY_RUN && (Date.now() - lastResolveCheck > 60000)) {
@@ -321,8 +281,12 @@ const tradeExcutor = async (clobClient: ClobClient) => {
             lastResolveCheck = Date.now();
         }
 
+        if (!isTrading) {
+            spinner.start('Waiting for new transactions');
+        }
+
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 };
 
-export default tradeExcutor;
+export default tradeExecutor;
