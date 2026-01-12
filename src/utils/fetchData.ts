@@ -10,18 +10,22 @@ const fetchData = async (url: string) => {
             return response.data;
         } catch (error: any) {
             const isLastAttempt = attempt === maxRetries;
-            const isNetworkError = error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND';
+            const status = error.response?.status;
+            const isRetryableStatus = status === 429 || (status >= 500 && status <= 599);
+            const isNetworkError = error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND' || !error.response;
 
-            if (isNetworkError && !isLastAttempt) {
-                const delay = baseDelay * Math.pow(2, attempt); // Exponential backoff
-                console.log(`Network error (${error.code}), retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
+            if ((isNetworkError || isRetryableStatus) && !isLastAttempt) {
+                const delay = baseDelay * Math.pow(2, attempt);
+                const errorMsg = status ? `Status ${status}` : (error.code || 'Network error');
+                console.log(`[RETRY] ${errorMsg} fetching data, retrying in ${delay}ms... (attempt ${attempt + 1}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 continue;
             }
 
-            // Either not a network error, or we've exhausted retries
-            console.error('Error fetching data:', error);
-            throw error;
+            // Either not retryable, or we've exhausted retries
+            const finalError = status ? `HTTP ${status} ${error.response?.statusText || ''}` : (error.message || 'Unknown error');
+            console.error(`Error fetching data from ${url}: ${finalError}`);
+            throw new Error(finalError);
         }
     }
 };

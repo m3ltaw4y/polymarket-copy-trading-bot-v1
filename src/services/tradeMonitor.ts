@@ -53,8 +53,8 @@ const fetchTradeData = async () => {
                 }
             }
         }
-    } catch (error) {
-        console.error('Error in fetchTradeData:', error);
+    } catch (error: any) {
+        console.error('Error in fetchTradeData:', error.message || error);
     }
 };
 

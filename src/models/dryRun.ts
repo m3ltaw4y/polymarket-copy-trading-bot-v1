@@ -7,6 +7,9 @@ const dryRunPositionSchema = new Schema({
     totalSpend: { type: Number, default: 0 },
     totalShares: { type: Number, default: 0 },
     avgPrice: { type: Number, default: 0 },
+    targetTotalSpend: { type: Number, default: 0 },
+    targetTotalShares: { type: Number, default: 0 },
+    targetAvgPrice: { type: Number, default: 0 },
     totalReturn: { type: Number, default: 0 },
     isClosed: { type: Boolean, default: false },
 });
@@ -23,6 +26,8 @@ const dryRunTradeSchema = new Schema({
     price: { type: Number, required: true },
     size: { type: Number, required: true },
     usdcSize: { type: Number, required: true },
+    targetPrice: { type: Number, required: true },
+    targetUsdcSize: { type: Number, required: true },
     timestamp: { type: Number, required: true },
 });
 

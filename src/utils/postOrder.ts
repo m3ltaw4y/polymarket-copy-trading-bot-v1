@@ -286,6 +286,8 @@ const simulateTrade = async (trade: UserActivityInterface, side: string, size: n
         price: price,
         size: size,
         usdcSize: usdcSize,
+        targetPrice: trade.price,
+        targetUsdcSize: trade.usdcSize,
         timestamp: Math.floor(Date.now() / 1000),
     });
     await newDryRunTrade.save();
@@ -301,11 +303,19 @@ const simulateTrade = async (trade: UserActivityInterface, side: string, size: n
     }
 
     if (side === 'BUY') {
-        const newTotalSpend = position.totalSpend + usdcSize;
-        const newTotalShares = position.totalShares + size;
-        position.avgPrice = newTotalSpend / newTotalShares;
+        // Update Bot Metrics
+        const newTotalSpend = (position.totalSpend || 0) + usdcSize;
+        const newTotalShares = (position.totalShares || 0) + size;
+        position.avgPrice = newTotalShares > 0 ? newTotalSpend / newTotalShares : 0;
         position.totalSpend = newTotalSpend;
         position.totalShares = newTotalShares;
+
+        // Update Target Metrics
+        const newTargetTotalSpend = (position.targetTotalSpend || 0) + trade.usdcSize;
+        const newTargetTotalShares = (position.targetTotalShares || 0) + trade.size;
+        position.targetAvgPrice = newTargetTotalShares > 0 ? newTargetTotalSpend / newTargetTotalShares : 0;
+        position.targetTotalSpend = newTargetTotalSpend;
+        position.targetTotalShares = newTargetTotalShares;
     }
 
     await position.save();

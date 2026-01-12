@@ -190,8 +190,8 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
                 // Print final summary
                 await checkAndPrintSummary(clobMarket.question || 'Resolved Market', undefined, conditionId);
             }
-        } catch (error) {
-            console.error(`Error resolving market ${conditionId}:`, error);
+        } catch (error: any) {
+            console.error(`Error resolving market ${conditionId}:`, error.message || error);
         }
     }
 };
@@ -213,7 +213,9 @@ const printOpenPositionsStatus = async () => {
     for (const title in groups) {
         console.log(`Market: ${title}`);
         groups[title].forEach(p => {
-            console.log(`  - ${p.outcome}: Spent $${p.totalSpend.toFixed(2)} (${p.totalShares.toFixed(2)} shares | avg price: $${p.avgPrice.toFixed(4)})`);
+            console.log(`  - ${p.outcome}:`);
+            console.log(`    Target: Spent $${(p.targetTotalSpend || 0).toFixed(2)} (Shares: ${(p.targetTotalShares || 0).toFixed(2)} | Avg: $${(p.targetAvgPrice || 0).toFixed(4)})`);
+            console.log(`    Bot   : Spent $${(p.totalSpend || 0).toFixed(2)} (Shares: ${(p.totalShares || 0).toFixed(2)} | Avg: $${(p.avgPrice || 0).toFixed(4)})`);
         });
     }
     console.log('--------------------------------------------------\n');
@@ -224,42 +226,75 @@ const checkAndPrintSummary = async (title: string, exitPrice?: number, condition
     const positions = await DryRunPosition.find(query);
     if (positions.length === 0) return;
 
-    console.log('\n==================================================');
-    console.log(`📊 [DRY RUN SUMMARY] ${conditionId ? 'Market Resolved' : 'Performance Report'}`);
-    console.log(`Title: ${title}`);
-    if (exitPrice) {
-        console.log(`Triggered by target sell @ $${exitPrice.toFixed(4)}`);
-    }
-    console.log('--------------------------------------------------');
+    console.log(`\n==================================================`);
+    console.log(`📊 [DRY RUN PERFORMANCE SUMMARY]`);
+    console.log(`Market: ${title}`);
+    console.log(`==================================================`);
+
     let totalSpendAll = 0;
     let totalReturnAll = 0;
+    let totalTargetSpendAll = 0;
+    let totalTargetReturnAll = 0;
 
     for (const p of positions) {
-        // If an exitPrice is provided, we calculate potential return for current holdings
-        // Otherwise use the stored totalReturn
-        const currentReturn = exitPrice ? p.totalShares * exitPrice : p.totalReturn;
-        const pnl = currentReturn - p.totalSpend;
-        const pnlPercent = p.totalSpend > 0 ? (pnl / p.totalSpend) * 100 : 0;
+        // Returns are based on totalReturn (calculated in resolveMarketPositions)
+        // or totalShares * exitPrice (if triggered by target sell)
+        const botReturn = exitPrice !== undefined ? p.totalShares * exitPrice : p.totalReturn;
+        const botPnL = botReturn - p.totalSpend;
+        const botPnLPercent = p.totalSpend > 0 ? (botPnL / p.totalSpend) * 100 : 0;
 
-        console.log(`Outcome ${p.outcome}:`);
-        console.log(`  Shares Held: ${p.totalShares.toFixed(2)}`);
+        // Calculate Target PNL as well
+        // For target, return is also shares * exitPrice or shares * 1/0
+        const isResolution = exitPrice === undefined;
+        let targetReturn = 0;
+        if (isResolution) {
+            // If p.totalReturn > 0 means it won (it's equal to totalShares)
+            // So for target, return is 1 * targetTotalShares
+            targetReturn = p.totalReturn > 0 ? p.targetTotalShares : 0;
+        } else {
+            targetReturn = p.targetTotalShares * exitPrice!;
+        }
+
+        const targetPnL = targetReturn - p.targetTotalSpend;
+        const targetPnLPercent = p.targetTotalSpend > 0 ? (targetPnL / p.targetTotalSpend) * 100 : 0;
+
+        console.log(`Outcome: ${p.outcome}`);
+        console.log(`  --- TARGET ACCOUNT ---`);
+        console.log(`  Spent:       $${p.targetTotalSpend.toFixed(2)} (Shares: ${p.targetTotalShares.toFixed(2)})`);
+        console.log(`  Avg Price:   $${p.targetAvgPrice.toFixed(4)}`);
+        console.log(`  Return:      $${targetReturn.toFixed(2)}`);
+        console.log(`  PnL:         $${targetPnL.toFixed(2)} (${targetPnLPercent.toFixed(2)}%)`);
+
+        console.log(`  --- YOUR BOT (DRY RUN) ---`);
+        console.log(`  Spent:       $${p.totalSpend.toFixed(2)} (Shares: ${p.totalShares.toFixed(2)})`);
         console.log(`  Avg Price:   $${p.avgPrice.toFixed(4)}`);
-        console.log(`  Total Spent: $${p.totalSpend.toFixed(2)}`);
-        console.log(`  Current Val: $${currentReturn.toFixed(2)}`);
-        console.log(`  PnL:         $${pnl.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
+        console.log(`  Return:      $${botReturn.toFixed(2)}`);
+        console.log(`  PnL:         $${botPnL.toFixed(2)} (${botPnLPercent.toFixed(2)}%)`);
+
+        // Slippage Analysis
+        const priceDiff = p.avgPrice - p.targetAvgPrice;
+        const slippagePercent = p.targetAvgPrice > 0 ? (priceDiff / p.targetAvgPrice) * 100 : 0;
+        console.log(`  --- SLIPPAGE ANALYSIS ---`);
+        console.log(`  Price Diff:  $${priceDiff.toFixed(4)} (${slippagePercent.toFixed(2)}% ${priceDiff > 0 ? 'WORSE' : 'BETTER'})`);
 
         totalSpendAll += p.totalSpend;
-        totalReturnAll += currentReturn;
+        totalReturnAll += botReturn;
+        totalTargetSpendAll += p.targetTotalSpend;
+        totalTargetReturnAll += targetReturn;
     }
 
     if (positions.length > 1) {
         const totalPnL = totalReturnAll - totalSpendAll;
         const totalPnLPercent = totalSpendAll > 0 ? (totalPnL / totalSpendAll) * 100 : 0;
+
+        const totalTargetPnL = totalTargetReturnAll - totalTargetSpendAll;
+        const totalTargetPnLPercent = totalTargetSpendAll > 0 ? (totalTargetPnL / totalTargetSpendAll) * 100 : 0;
+
         console.log('--------------------------------------------------');
-        console.log(`TOTAL:`);
-        console.log(`  Spent:       $${totalSpendAll.toFixed(2)}`);
-        console.log(`  Current Val: $${totalReturnAll.toFixed(2)}`);
-        console.log(`  PnL:         $${totalPnL.toFixed(2)} (${totalPnLPercent.toFixed(2)}%)`);
+        console.log(`Combined Totals:`);
+        console.log(`  Target PnL:  $${totalTargetPnL.toFixed(2)} (${totalTargetPnLPercent.toFixed(2)}%)`);
+        console.log(`  Your PnL:    $${totalPnL.toFixed(2)} (${totalPnLPercent.toFixed(2)}%)`);
+        console.log(`  Profit Diff: $${(totalPnL - totalTargetPnL).toFixed(2)}`);
     }
     console.log('==================================================\n');
 };
