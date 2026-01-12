@@ -43,9 +43,6 @@ const postOrder = async (
                 return parseFloat(bid.price) > parseFloat(max.price) ? bid : max;
             }, orderBook.bids[0]);
 
-            if (!ENV.LOG_ONLY_SUCCESS) {
-                console.log('Max price bid:', maxPriceBid);
-            }
             const currentPriceMerge = parseFloat(maxPriceBid.price);
             if (!ENV.DRY_RUN && Math.abs(currentPriceMerge - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceMerge}, target ${trade.price} (diff ${Math.abs(currentPriceMerge - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
@@ -139,7 +136,6 @@ const postOrder = async (
                 return parseFloat(ask.price) < parseFloat(min.price) ? ask : min;
             }, orderBook.asks[0]);
 
-            console.log('Min price ask:', minPriceAsk);
             const currentPriceBuy = parseFloat(minPriceAsk.price);
             if (!ENV.DRY_RUN && Math.abs(currentPriceBuy - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceBuy}, target ${trade.price} (diff ${Math.abs(currentPriceBuy - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
@@ -222,9 +218,6 @@ const postOrder = async (
                 return parseFloat(bid.price) > parseFloat(max.price) ? bid : max;
             }, orderBook.bids[0]);
 
-            if (!ENV.LOG_ONLY_SUCCESS) {
-                console.log('Max price bid:', maxPriceBid);
-            }
             const currentPriceSell = parseFloat(maxPriceBid.price);
             if (!ENV.DRY_RUN && Math.abs(currentPriceSell - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceSell}, target ${trade.price} (diff ${Math.abs(currentPriceSell - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
