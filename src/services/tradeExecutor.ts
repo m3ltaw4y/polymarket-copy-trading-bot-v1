@@ -19,6 +19,18 @@ const UserActivity = getUserActivityModel(USER_ADDRESS);
 const UserPosition = getUserPositionModel(USER_ADDRESS);
 const MyPosition = getUserPositionModel(PROXY_WALLET);
 
+let cachedMyBalance: number | undefined;
+let cachedUserBalance: number | undefined;
+
+const refreshBalances = async () => {
+    try {
+        cachedMyBalance = await getMyBalance(PROXY_WALLET);
+        cachedUserBalance = await getMyBalance(USER_ADDRESS);
+    } catch (error) {
+        console.error('Failed to refresh balances:', error instanceof Error ? error.message : error);
+    }
+};
+
 const readTempTrade = async () => {
     const query: any = {
         $and: [
@@ -53,12 +65,15 @@ const doTrading = async (clobClient: ClobClient) => {
 
         if (!ENV.DRY_RUN) {
             try {
-                my_balance = await getMyBalance(PROXY_WALLET);
-                user_balance = await getMyBalance(USER_ADDRESS);
+                if (cachedMyBalance === undefined || cachedUserBalance === undefined) {
+                    await refreshBalances();
+                }
+                my_balance = cachedMyBalance ?? 1000000;
+                user_balance = cachedUserBalance ?? 1000000;
                 my_position = (await MyPosition.findOne({ asset: trade.asset })) as any;
                 user_position = (await UserPosition.findOne({ asset: trade.asset })) as any;
             } catch (error) {
-                console.error('Failed to fetch balance or position:', error instanceof Error ? error.message : error);
+                console.error('Failed to fetch position:', error instanceof Error ? error.message : error);
                 await UserActivity.updateOne({ _id: trade._id }, { $inc: { botExcutedTime: 1 } });
                 continue;
             }
@@ -75,6 +90,9 @@ const doTrading = async (clobClient: ClobClient) => {
                     await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 } else {
                     await postOrder(clobClient, condition, my_position, user_position, trade, my_balance, user_balance);
+                    if (!ENV.DRY_RUN) {
+                        await refreshBalances(); // Update cache after successful bet
+                    }
                 }
             } catch (error) {
                 console.error(`Error processing trade ${trade.transactionHash}:`, error instanceof Error ? error.message : error);
@@ -262,6 +280,10 @@ const triggerTrading = async (clobClient: ClobClient) => {
 
 const tradeExecutor = async (clobClient: ClobClient) => {
     console.log(`Executor initialized. Waiting for trades...`);
+
+    if (!ENV.DRY_RUN) {
+        await refreshBalances();
+    }
 
     // Listen for immediate events from monitor
     tradeEventEmitter.on('newTrade', () => {
