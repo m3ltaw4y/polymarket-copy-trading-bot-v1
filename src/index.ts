@@ -8,12 +8,20 @@ import getMyBalance from './utils/getMyBalance';
 import moment from 'moment';
 import fetchData from './utils/fetchData';
 import { DryRunPosition, DryRunTrade } from './models/dryRun';
+import { runHistoricalAnalysis } from './algo/analyzer';
 
 const USER_ADDRESS = ENV.USER_ADDRESS;
 const PROXY_WALLET = ENV.PROXY_WALLET;
 const TRADE_SCALE = ENV.TRADE_SCALE;
 
 export const main = async () => {
+    // Check for ALGO_ANALYZE mode
+    if (ENV.ALGO_ANALYZE) {
+        await connectDB();
+        await runHistoricalAnalysis();
+        process.exit(0);
+    }
+
     await connectDB();
     console.log(`Target User Wallet addresss is: ${USER_ADDRESS}`);
     console.log(`My Wallet addresss is: ${PROXY_WALLET}`);

@@ -45,4 +45,11 @@ export const ENV = {
     MAX_PRICE_DIFF: parseFloat(process.env.MAX_PRICE_DIFF || '0'),
     LOG_ONLY_SUCCESS: (process.env.LOG_ONLY_SUCCESS || '').trim().startsWith('1'),
     DRY_RUN: (process.env.DRY_RUN || '').trim().startsWith('1'),
+    // Chainlink Data Streams
+    API_KEY: process.env.API_KEY || '',
+    USER_SECRET: process.env.USER_SECRET || '',
+    BTC_DATA_STREAM: process.env.BTC_DATA_STREAM || '',
+    // Analysis mode
+    ALGO_ANALYZE: (process.env.ALGO_ANALYZE || '').trim().startsWith('1'),
+    ANALYSIS_LOOKBACK_DAYS: parseInt(process.env.ANALYSIS_LOOKBACK_DAYS || '7', 10),
 };
