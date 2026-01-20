@@ -6,19 +6,16 @@ import path from "path"
 dotenv.config({ path: path.join(process.cwd(), ".env") })
 
 async function main() {
-    if (process.argv.length < 3) {
-        console.error("Please provide one or more feed IDs as arguments")
-        console.error("\nExamples:")
-        console.error("  Single feed:")
-        console.error("    npx tsx stream.ts 0x000359843a543ee2fe414dc14c7e7920ef10f4372990b79d6361cdc0dd1ba782")
-        console.error("  Multiple feeds:")
-        console.error(
-            "    npx tsx stream.ts 0x000359843a543ee2fe414dc14c7e7920ef10f4372990b79d6361cdc0dd1ba782,0x00036fe43f87884450b4c7e093cd5ed99cac6640d8c2000e6afc02c8838d0265"
-        )
+    // Read feed ID from environment variable
+    const btcDataStream = process.env.BTC_DATA_STREAM
+
+    if (!btcDataStream) {
+        console.error("❌ BTC_DATA_STREAM environment variable is not set")
+        console.error("Please add BTC_DATA_STREAM to your .env file")
         process.exit(1)
     }
 
-    const feedIds = process.argv[2].split(",")
+    const feedIds = [btcDataStream]
 
     // Debug: Show if credentials are loaded
     console.log("🔑 Checking credentials...")
