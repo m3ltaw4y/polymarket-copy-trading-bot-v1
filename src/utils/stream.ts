@@ -32,17 +32,29 @@ async function main() {
     console.log("=".repeat(60))
 
     try {
+
         const client = createClient({
             apiKey: process.env.API_KEY || "YOUR_API_KEY",
             userSecret: process.env.USER_SECRET || "YOUR_USER_SECRET",
-            endpoint: "https://api.dataengine.chain.link",
-            wsEndpoint: "wss://ws.dataengine.chain.link",
+            endpoint: "https://api.dataengine.chain.link", // Mainnet endpoint
+            wsEndpoint: "wss://ws.dataengine.chain.link", // Single endpoint (mainnet only)
+            haMode: true, // Enable High Availability mode
 
-            // Comment to disable SDK logging:
+            // Optional: Advanced connection monitoring with origin tracking
+            connectionStatusCallback: (isConnected, host, origin) => {
+                const timestamp = new Date().toISOString().substring(11, 19)
+                const status = isConnected ? "🟢 UP" : "🔴 DOWN"
+                console.log(`[${timestamp}] ${status} ${host}${origin || ""}`)
+
+                // Example: Send alerts for specific origins
+                if (!isConnected && origin) {
+                    console.warn(`⚠️ Alert: Origin ${origin} on ${host} went offline`)
+                }
+            },
+
             logging: {
                 logger: console,
                 logLevel: LogLevel.INFO,
-                enableConnectionDebug: false, // Enable WebSocket ping/pong and connection state logs (logLevel should be DEBUG)
             },
         })
 
