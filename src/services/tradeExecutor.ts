@@ -146,15 +146,22 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
 
                     for (const p of marketPositions) {
                         const won = p.outcome.toLowerCase() === winningOutcome.toLowerCase();
+                        const targetReturn = won ? p.targetTotalShares : 0;
+
                         p.totalReturn = won ? p.totalShares : 0;
                         p.isClosed = true;
                         p.isWinner = won;
                         p.pnl = p.totalReturn - p.totalSpend;
                         await p.save();
 
-                        // Update global stats
+                        // Update global stats - Bot
                         stats.totalSpend += p.totalSpend;
                         stats.totalReturns += p.totalReturn;
+
+                        // Update global stats - Target
+                        stats.targetTotalSpend += p.targetTotalSpend;
+                        stats.targetTotalReturns += targetReturn;
+
                         if (won) {
                             stats.totalWins += p.totalReturn;
                             stats.winningPositions += 1;
@@ -167,6 +174,7 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
                     }
 
                     stats.netPnL = stats.totalReturns - stats.totalSpend;
+                    stats.targetNetPnL = stats.targetTotalReturns - stats.targetTotalSpend;
                     stats.lastUpdated = new Date();
                     await stats.save();
                 } else {
@@ -207,12 +215,33 @@ const printOpenPositionsStatus = async () => {
 
         console.log('\n📊 CUMULATIVE STATISTICS (All Markets)');
         console.log('--------------------------------------------------');
-        console.log(`Total Spent:        $${stats.totalSpend.toFixed(2)}`);
-        console.log(`Total Returns:      $${stats.totalReturns.toFixed(2)}`);
-        console.log(`Net P&L:            ${stats.netPnL >= 0 ? '+' : ''}$${stats.netPnL.toFixed(2)} (${stats.totalSpend > 0 ? ((stats.netPnL / stats.totalSpend) * 100).toFixed(2) : '0.00'}%)`);
-        console.log(`Winning Positions:  ${stats.winningPositions} (Total Wins: $${stats.totalWins.toFixed(2)})`);
-        console.log(`Losing Positions:   ${stats.losingPositions} (Total Losses: $${stats.totalLosses.toFixed(2)})`);
-        console.log(`Win Rate:           ${winRate.toFixed(2)}%`);
+
+        // Bot Performance
+        console.log('YOUR BOT:');
+        console.log(`  Total Spent:        $${stats.totalSpend.toFixed(2)}`);
+        console.log(`  Total Returns:      $${stats.totalReturns.toFixed(2)}`);
+        console.log(`  Net P&L:            ${stats.netPnL >= 0 ? '+' : ''}$${stats.netPnL.toFixed(2)} (${stats.totalSpend > 0 ? ((stats.netPnL / stats.totalSpend) * 100).toFixed(2) : '0.00'}%)`);
+        console.log(`  Winning Positions:  ${stats.winningPositions} (Total Wins: $${stats.totalWins.toFixed(2)})`);
+        console.log(`  Losing Positions:   ${stats.losingPositions} (Total Losses: $${stats.totalLosses.toFixed(2)})`);
+        console.log(`  Win Rate:           ${winRate.toFixed(2)}%`);
+
+        // Target Performance
+        console.log('\nTARGET ACCOUNT:');
+        console.log(`  Total Spent:        $${stats.targetTotalSpend.toFixed(2)}`);
+        console.log(`  Total Returns:      $${stats.targetTotalReturns.toFixed(2)}`);
+        console.log(`  Net P&L:            ${stats.targetNetPnL >= 0 ? '+' : ''}$${stats.targetNetPnL.toFixed(2)} (${stats.targetTotalSpend > 0 ? ((stats.targetNetPnL / stats.targetTotalSpend) * 100).toFixed(2) : '0.00'}%)`);
+
+        // Comparison
+        const pnlDiff = stats.netPnL - stats.targetNetPnL;
+        const pnlDiffPercent = stats.targetNetPnL !== 0 ? ((pnlDiff / Math.abs(stats.targetNetPnL)) * 100) : 0;
+        console.log('\nCOMPARISON (Bot vs Target):');
+        console.log(`  P&L Difference:     ${pnlDiff >= 0 ? '+' : ''}$${pnlDiff.toFixed(2)} (${pnlDiff >= 0 ? '✅' : '⚠️'} ${pnlDiffPercent >= 0 ? '+' : ''}${pnlDiffPercent.toFixed(2)}%)`);
+
+        if (stats.largestMarketSpend > 0) {
+            console.log(`\n💰 PEAK CAPITAL REQUIREMENT:`);
+            console.log(`  Largest Market:     $${stats.largestMarketSpend.toFixed(2)}`);
+            console.log(`  Market:             ${stats.largestMarketTitle}`);
+        }
         console.log('--------------------------------------------------\n');
     }
 

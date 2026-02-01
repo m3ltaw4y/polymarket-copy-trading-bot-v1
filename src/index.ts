@@ -61,13 +61,19 @@ export const main = async () => {
         console.log(`Exact Match Mode:    ${ENV.TRADE_EXACT ? 'ON' : 'OFF'}`);
         console.log(`Balances:            SKIPPED (Dry Run)`);
 
-        // Clear dry run data on startup
-        try {
-            await DryRunTrade.deleteMany({});
-            await DryRunPosition.deleteMany({});
-            console.log(`Dry Run Data:        CLEARED`);
-        } catch (e) {
-            console.error('Failed to clear dry run data:', e);
+        // Clear dry run data on startup if RESET_ON_RUN is enabled
+        if (ENV.RESET_ON_RUN) {
+            try {
+                const { DryRunStats } = await import('./models/dryRunStats');
+                await DryRunTrade.deleteMany({});
+                await DryRunPosition.deleteMany({});
+                await DryRunStats.deleteMany({});
+                console.log(`Dry Run Data:        CLEARED (RESET_ON_RUN=1)`);
+            } catch (e) {
+                console.error('Failed to clear dry run data:', e);
+            }
+        } else {
+            console.log(`Dry Run Data:        PERSISTED (set RESET_ON_RUN=1 to clear)`);
         }
 
         console.log('--------------------------------------------------');

@@ -313,6 +313,22 @@ const simulateTrade = async (trade: UserActivityInterface, side: string, size: n
 
     await position.save();
 
+    // Update largest market position if needed
+    const { DryRunStats } = await import('../models/dryRunStats');
+    const allPositionsInMarket = await DryRunPosition.find({ conditionId: trade.conditionId });
+    const totalMarketSpend = allPositionsInMarket.reduce((sum, p) => sum + (p.targetTotalSpend || 0), 0);
+
+    let stats = await DryRunStats.findOne();
+    if (!stats) {
+        stats = new DryRunStats();
+    }
+
+    if (totalMarketSpend > (stats.largestMarketSpend || 0)) {
+        stats.largestMarketSpend = totalMarketSpend;
+        stats.largestMarketTitle = trade.title;
+        await stats.save();
+    }
+
     // Mark activity as processed
     await UserActivity.updateOne({ _id: trade._id }, { bot: true });
 

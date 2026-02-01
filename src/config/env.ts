@@ -45,6 +45,7 @@ export const ENV = {
     MAX_PRICE_DIFF: parseFloat(process.env.MAX_PRICE_DIFF || '0'),
     LOG_ONLY_SUCCESS: (process.env.LOG_ONLY_SUCCESS || '').trim().startsWith('1'),
     DRY_RUN: (process.env.DRY_RUN || '').trim().startsWith('1'),
+    RESET_ON_RUN: (process.env.RESET_ON_RUN || '').trim().startsWith('1'),
     // Chainlink Data Streams
     API_KEY: process.env.API_KEY || '',
     USER_SECRET: process.env.USER_SECRET || '',

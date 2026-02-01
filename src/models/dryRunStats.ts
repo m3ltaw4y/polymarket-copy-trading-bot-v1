@@ -8,6 +8,13 @@ const dryRunStatsSchema = new Schema({
     winningPositions: { type: Number, default: 0 },
     losingPositions: { type: Number, default: 0 },
     netPnL: { type: Number, default: 0 },
+    // Target account stats for comparison
+    targetTotalSpend: { type: Number, default: 0 },
+    targetTotalReturns: { type: Number, default: 0 },
+    targetNetPnL: { type: Number, default: 0 },
+    // Peak capital requirement
+    largestMarketSpend: { type: Number, default: 0 },
+    largestMarketTitle: { type: String, default: '' },
     lastUpdated: { type: Date, default: Date.now },
 });
 
