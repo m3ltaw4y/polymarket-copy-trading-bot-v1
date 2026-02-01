@@ -3,6 +3,7 @@ import { UserActivityInterface, UserPositionInterface } from '../interfaces/User
 import { ENV } from '../config/env';
 import { getUserActivityModel, getUserPositionModel } from '../models/userHistory';
 import { DryRunPosition } from '../models/dryRun';
+import { DryRunStats } from '../models/dryRunStats';
 import fetchData from '../utils/fetchData';
 import spinner from '../utils/spinner';
 import getMyBalance from '../utils/getMyBalance';
@@ -137,18 +138,44 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
                     const winningOutcome = winners[0].outcome;
                     console.log(`Winning Outcome: ${winningOutcome}`);
 
+                    // Get or create stats document
+                    let stats = await DryRunStats.findOne();
+                    if (!stats) {
+                        stats = new DryRunStats();
+                    }
+
                     for (const p of marketPositions) {
                         const won = p.outcome.toLowerCase() === winningOutcome.toLowerCase();
                         p.totalReturn = won ? p.totalShares : 0;
                         p.isClosed = true;
+                        p.isWinner = won;
+                        p.pnl = p.totalReturn - p.totalSpend;
                         await p.save();
-                        console.log(`  - Position ${p.outcome}: ${won ? '🏆 WON' : '❌ LOST'}`);
+
+                        // Update global stats
+                        stats.totalSpend += p.totalSpend;
+                        stats.totalReturns += p.totalReturn;
+                        if (won) {
+                            stats.totalWins += p.totalReturn;
+                            stats.winningPositions += 1;
+                            console.log(`  - Position ${p.outcome}: 🏆 WON $${p.totalReturn.toFixed(2)} (Spent: $${p.totalSpend.toFixed(2)}, PnL: +$${p.pnl.toFixed(2)})`);
+                        } else {
+                            stats.totalLosses += p.totalSpend;
+                            stats.losingPositions += 1;
+                            console.log(`  - Position ${p.outcome}: ❌ LOST $${p.totalSpend.toFixed(2)} (PnL: -$${p.totalSpend.toFixed(2)})`);
+                        }
                     }
+
+                    stats.netPnL = stats.totalReturns - stats.totalSpend;
+                    stats.lastUpdated = new Date();
+                    await stats.save();
                 } else {
                     console.log(`No winner declared yet in CLOB. Marking as closed (payout TBD).`);
                     for (const p of marketPositions) {
                         p.totalReturn = 0;
                         p.isClosed = true;
+                        p.isWinner = false;
+                        p.pnl = -p.totalSpend;
                         await p.save();
                     }
                 }
@@ -166,26 +193,53 @@ const printOpenPositionsStatus = async () => {
         query.title = { $regex: ENV.TITLE_FILTER, $options: 'i' };
     }
     const activePositions = await DryRunPosition.find(query);
-    if (activePositions.length === 0) return;
 
-    console.log('\n--------------------------------------------------');
-    console.log(`🕒 [DRY RUN STATUS] Open Positions (${new Date().toLocaleTimeString()})`);
+    console.log('\n==================================================');
+    console.log(`🕒 [DRY RUN STATUS] (${new Date().toLocaleTimeString()})`);
+    console.log('==================================================');
 
-    const groups: { [key: string]: typeof activePositions } = {};
-    activePositions.forEach(p => {
-        if (!groups[p.title]) groups[p.title] = [];
-        groups[p.title].push(p);
-    });
+    // Display running tally
+    const stats = await DryRunStats.findOne();
+    if (stats) {
+        const winRate = stats.winningPositions + stats.losingPositions > 0
+            ? (stats.winningPositions / (stats.winningPositions + stats.losingPositions) * 100)
+            : 0;
 
-    for (const title in groups) {
-        console.log(`Market: ${title}`);
-        groups[title].forEach(p => {
-            console.log(`  - ${p.outcome}:`);
-            console.log(`    Target: Spent $${(p.targetTotalSpend || 0).toFixed(2)} (Shares: ${(p.targetTotalShares || 0).toFixed(2)} | Avg: $${(p.targetAvgPrice || 0).toFixed(4)})`);
-            console.log(`    Bot   : Spent $${(p.totalSpend || 0).toFixed(2)} (Shares: ${(p.totalShares || 0).toFixed(2)} | Avg: $${(p.avgPrice || 0).toFixed(4)})`);
-        });
+        console.log('\n📊 CUMULATIVE STATISTICS (All Markets)');
+        console.log('--------------------------------------------------');
+        console.log(`Total Spent:        $${stats.totalSpend.toFixed(2)}`);
+        console.log(`Total Returns:      $${stats.totalReturns.toFixed(2)}`);
+        console.log(`Net P&L:            ${stats.netPnL >= 0 ? '+' : ''}$${stats.netPnL.toFixed(2)} (${stats.totalSpend > 0 ? ((stats.netPnL / stats.totalSpend) * 100).toFixed(2) : '0.00'}%)`);
+        console.log(`Winning Positions:  ${stats.winningPositions} (Total Wins: $${stats.totalWins.toFixed(2)})`);
+        console.log(`Losing Positions:   ${stats.losingPositions} (Total Losses: $${stats.totalLosses.toFixed(2)})`);
+        console.log(`Win Rate:           ${winRate.toFixed(2)}%`);
+        console.log('--------------------------------------------------\n');
     }
-    console.log('--------------------------------------------------\n');
+
+    // Display open positions
+    if (activePositions.length > 0) {
+        console.log(`📈 OPEN POSITIONS (${activePositions.length})`);
+        console.log('--------------------------------------------------');
+
+        const groups: { [key: string]: typeof activePositions } = {};
+        activePositions.forEach(p => {
+            if (!groups[p.title]) groups[p.title] = [];
+            groups[p.title].push(p);
+        });
+
+        for (const title in groups) {
+            console.log(`Market: ${title}`);
+            groups[title].forEach(p => {
+                console.log(`  - ${p.outcome}:`);
+                console.log(`    Target: Spent $${(p.targetTotalSpend || 0).toFixed(2)} (Shares: ${(p.targetTotalShares || 0).toFixed(2)} | Avg: $${(p.targetAvgPrice || 0).toFixed(4)})`);
+                console.log(`    Bot   : Spent $${(p.totalSpend || 0).toFixed(2)} (Shares: ${(p.totalShares || 0).toFixed(2)} | Avg: $${(p.avgPrice || 0).toFixed(4)})`);
+            });
+        }
+    } else {
+        console.log('📈 OPEN POSITIONS: None');
+    }
+
+    console.log('==================================================\n');
 };
 
 const checkAndPrintSummary = async (title: string, exitPrice?: number, conditionId?: string) => {

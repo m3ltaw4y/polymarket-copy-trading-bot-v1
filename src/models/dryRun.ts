@@ -12,6 +12,8 @@ const dryRunPositionSchema = new Schema({
     targetAvgPrice: { type: Number, default: 0 },
     totalReturn: { type: Number, default: 0 },
     isClosed: { type: Boolean, default: false },
+    isWinner: { type: Boolean, default: false },
+    pnl: { type: Number, default: 0 },
 });
 
 // Compound index to quickly find position for a market and outcome
