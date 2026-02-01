@@ -194,6 +194,7 @@ const postOrder = async (
         if (!my_position) {
             console.log('No position to sell');
             await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            return;
         } else if (!user_position) {
             remaining = my_position.size;
         } else {
@@ -205,6 +206,53 @@ const postOrder = async (
             const calculatedSell = my_position.size * ratio * TRADE_SCALE;
             remaining = Math.min(calculatedSell, my_position.size);
         }
+
+        // Handle dry run SELL
+        if (ENV.DRY_RUN) {
+            const position = await DryRunPosition.findOne({ conditionId: trade.conditionId, outcome: trade.outcome });
+            if (!position) {
+                console.log(`[DRY RUN] No position found to sell for ${trade.outcome}`);
+                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                return;
+            }
+
+            // Calculate how much to sell (1:1 matching with target)
+            const sellShares = Math.min(trade.size, position.totalShares);
+            const sellValue = sellShares * trade.price;
+
+            if (sellShares > 0) {
+                position.totalShares -= sellShares;
+                position.totalSpend -= sellValue;
+
+                // Update target metrics
+                position.targetTotalShares -= trade.size;
+                position.targetTotalSpend -= trade.usdcSize;
+
+                // Recalculate averages
+                if (position.totalShares > 0) {
+                    position.avgPrice = position.totalSpend / position.totalShares;
+                } else {
+                    position.avgPrice = 0;
+                    position.totalSpend = 0; // Fully closed
+                }
+
+                if (position.targetTotalShares > 0) {
+                    position.targetAvgPrice = position.targetTotalSpend / position.targetTotalShares;
+                } else {
+                    position.targetAvgPrice = 0;
+                    position.targetTotalSpend = 0;
+                }
+
+                await position.save();
+                console.log(`[DRY RUN] SOLD ${sellShares.toFixed(2)} shares of ${trade.outcome} @ $${trade.price.toFixed(4)} (Value: $${sellValue.toFixed(2)})`);
+                console.log(`[DRY RUN] Remaining: ${position.totalShares.toFixed(2)} shares (Avg: $${position.avgPrice.toFixed(4)})`);
+            }
+
+            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            return;
+        }
+
+        // Live trading SELL logic
         let retry = 0;
         while (remaining > 0 && retry < RETRY_LIMIT) {
             const orderBook = await clobClient.getOrderBook(trade.asset);

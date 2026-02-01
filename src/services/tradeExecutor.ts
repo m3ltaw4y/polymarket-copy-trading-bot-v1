@@ -84,10 +84,7 @@ const doTrading = async (clobClient: ClobClient) => {
 
         if (condition === 'buy' || condition === 'sell' || condition === 'merge') {
             try {
-                if (ENV.DRY_RUN && condition === 'sell') {
-                    console.log(`[DRY RUN] Skipping SELL trade for ${trade.title} (resolving markets handles this)`);
-                    await UserActivity.updateOne({ _id: trade._id }, { bot: true });
-                } else if (ENV.DRY_RUN && condition === 'merge') {
+                if (ENV.DRY_RUN && condition === 'merge') {
                     await UserActivity.updateOne({ _id: trade._id }, { bot: true });
                 } else {
                     await postOrder(clobClient, condition, my_position, user_position, trade, my_balance, user_balance);
@@ -121,9 +118,19 @@ const resolveMarketPositions = async (clobClient: ClobClient) => {
 
     const marketIds = [...new Set(activePositions.map((p) => p.conditionId))].filter(id => !!id);
 
-    for (const conditionId of marketIds) {
+    // Parallelize market data fetching to prevent loop lag
+    const marketDataResults = await Promise.all(marketIds.map(async (id) => {
         try {
-            const clobMarket = await clobClient.getMarket(conditionId);
+            const clobMarket = await clobClient.getMarket(id);
+            return { conditionId: id, clobMarket };
+        } catch (error: any) {
+            console.error(`Error fetching CLOB market ${id}:`, error.message || error);
+            return { conditionId: id, clobMarket: null };
+        }
+    }));
+
+    for (const { conditionId, clobMarket } of marketDataResults) {
+        try {
             if (!clobMarket) continue;
 
             const isResolved = clobMarket.closed === true || clobMarket.active === false;
@@ -376,15 +383,15 @@ const tradeExecutor = async (clobClient: ClobClient) => {
     let lastResolveCheck = 0;
 
     while (true) {
-        // Fallback check every loop iteration (1s)
-        await triggerTrading(clobClient);
-
-        // Periodically check for market resolution and print status in Dry Run mode
-        if (ENV.DRY_RUN && (Date.now() - lastResolveCheck > 60000)) {
+        // Periodically check for market resolution and print status in Dry Run mode FIRST
+        if (ENV.DRY_RUN && (Date.now() - lastResolveCheck >= 60000)) {
             await resolveMarketPositions(clobClient);
             await printOpenPositionsStatus();
             lastResolveCheck = Date.now();
         }
+
+        // Fallback check every loop iteration (1s)
+        await triggerTrading(clobClient);
 
         if (!isTrading) {
             spinner.start('Waiting for new transactions');
