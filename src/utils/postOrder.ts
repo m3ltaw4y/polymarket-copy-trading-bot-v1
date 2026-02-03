@@ -15,10 +15,12 @@ const postOrder = async (
     condition: string,
     my_position: UserPositionInterface | undefined,
     user_position: UserPositionInterface | undefined,
-    trade: UserActivityInterface,
+    trade: UserActivityInterface & { aggregatedIds?: any[] },
     my_balance: number,
     user_balance: number
 ) => {
+    const idsToUpdate = trade.aggregatedIds ? trade.aggregatedIds : [trade._id];
+
     //Merge strategy
     if (condition === 'merge') {
         if (!ENV.LOG_ONLY_SUCCESS) {
@@ -26,7 +28,7 @@ const postOrder = async (
         }
         if (!my_position) {
             console.log('my_position is undefined');
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
             return;
         }
         let remaining = my_position.size;
@@ -35,7 +37,7 @@ const postOrder = async (
             const orderBook = await clobClient.getOrderBook(trade.asset);
             if (!orderBook.bids || orderBook.bids.length === 0) {
                 console.log('No bids found');
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 break;
             }
 
@@ -46,7 +48,7 @@ const postOrder = async (
             const currentPriceMerge = parseFloat(maxPriceBid.price);
             if (!ENV.DRY_RUN && Math.abs(currentPriceMerge - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceMerge}, target ${trade.price} (diff ${Math.abs(currentPriceMerge - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 break;
             }
 
@@ -84,9 +86,9 @@ const postOrder = async (
             }
         }
         if (retry >= RETRY_LIMIT) {
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true, botExcutedTime: retry });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true, botExcutedTime: retry });
         } else {
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
         }
     } else if (condition === 'buy') {       //Buy strategy
         if (!ENV.LOG_ONLY_SUCCESS) {
@@ -98,7 +100,6 @@ const postOrder = async (
         }
 
         // Calculate raw amount
-        // Calculate amount based on strategy
         let calculatedAmount = 0;
         if (ENV.DRY_RUN) {
             calculatedAmount = trade.usdcSize;
@@ -122,13 +123,12 @@ const postOrder = async (
         }
 
         let remaining = calculatedAmount;
-        // Post buy orders...
         let retry = 0;
         while (remaining > 0 && retry < RETRY_LIMIT) {
             const orderBook = await clobClient.getOrderBook(trade.asset);
             if (!orderBook.asks || orderBook.asks.length === 0) {
                 console.log('No asks found');
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 break;
             }
 
@@ -139,7 +139,7 @@ const postOrder = async (
             const currentPriceBuy = parseFloat(minPriceAsk.price);
             if (!ENV.DRY_RUN && Math.abs(currentPriceBuy - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceBuy}, target ${trade.price} (diff ${Math.abs(currentPriceBuy - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 break;
             }
 
@@ -182,9 +182,9 @@ const postOrder = async (
             }
         }
         if (retry >= RETRY_LIMIT) {
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true, botExcutedTime: retry });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true, botExcutedTime: retry });
         } else {
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
         }
     } else if (condition === 'sell') {          //Sell strategy
         if (!ENV.LOG_ONLY_SUCCESS) {
@@ -193,7 +193,7 @@ const postOrder = async (
         let remaining = 0;
         if (!my_position) {
             console.log('No position to sell');
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
             return;
         } else if (!user_position) {
             remaining = my_position.size;
@@ -212,7 +212,7 @@ const postOrder = async (
             const position = await DryRunPosition.findOne({ conditionId: trade.conditionId, outcome: trade.outcome });
             if (!position) {
                 console.log(`[DRY RUN] No position found to sell for ${trade.outcome}`);
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 return;
             }
 
@@ -248,7 +248,7 @@ const postOrder = async (
                 console.log(`[DRY RUN] Remaining: ${position.totalShares.toFixed(2)} shares (Avg: $${position.avgPrice.toFixed(4)})`);
             }
 
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
             return;
         }
 
@@ -257,7 +257,7 @@ const postOrder = async (
         while (remaining > 0 && retry < RETRY_LIMIT) {
             const orderBook = await clobClient.getOrderBook(trade.asset);
             if (!orderBook.bids || orderBook.bids.length === 0) {
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 console.log('No bids found');
                 break;
             }
@@ -269,7 +269,7 @@ const postOrder = async (
             const currentPriceSell = parseFloat(maxPriceBid.price);
             if (!ENV.DRY_RUN && Math.abs(currentPriceSell - trade.price) > ENV.MAX_PRICE_DIFF) {
                 console.log(`Price difference too large: current ${currentPriceSell}, target ${trade.price} (diff ${Math.abs(currentPriceSell - trade.price).toFixed(4)} > ${ENV.MAX_PRICE_DIFF}). Skipping trade.`);
-                await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 break;
             }
 
@@ -307,18 +307,20 @@ const postOrder = async (
             }
         }
         if (retry >= RETRY_LIMIT) {
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true, botExcutedTime: retry });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true, botExcutedTime: retry });
         } else {
-            await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
         }
     } else {
         console.log('Condition not supported');
     }
 };
 
-const simulateTrade = async (trade: UserActivityInterface, side: string, size: number, price: number) => {
+const simulateTrade = async (trade: UserActivityInterface & { aggregatedIds?: any[] }, side: string, size: number, price: number) => {
     const usdcSize = size * price;
-    console.log(`[DRY RUN] Simulating ${side} trade for ${trade.title} (${trade.outcome}) @ ${price}. Size: ${size}, USDC: $${usdcSize.toFixed(2)}`);
+    const idsToUpdate = trade.aggregatedIds ? trade.aggregatedIds : [trade._id];
+
+    console.log(`[DRY RUN] Simulating ${side} trade for ${trade.title} (${trade.outcome}) @ ${price}. Size: ${size.toFixed(2)}, USDC: $${usdcSize.toFixed(2)}`);
 
     const newDryRunTrade = new DryRunTrade({
         title: trade.title,
@@ -378,11 +380,7 @@ const simulateTrade = async (trade: UserActivityInterface, side: string, size: n
     }
 
     // Mark activity as processed
-    await UserActivity.updateOne({ _id: trade._id }, { bot: true });
-
-    // Print summary if requested? 
-    // The user said: "when looking for new trades, if you notice one of the trades we have bets on is closed, print out a summary"
-    // I'll handle the "closed" detection in tradeExecutor.
+    await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
 };
 
 export default postOrder;

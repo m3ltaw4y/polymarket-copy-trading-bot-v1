@@ -50,11 +50,52 @@ const readTempTrade = async () => {
         query.$and.push({ title: { $regex: ENV.TITLE_FILTER, $options: 'i' } });
     }
 
-    temp_trades = (await UserActivity.find(query).exec()).map((trade) => trade as UserActivityInterface);
+    const allPending = await UserActivity.find(query).sort({ timestamp: 1 }).lean().exec();
+
+    if (allPending.length === 0) {
+        temp_trades = [];
+        return;
+    }
+
+    // Aggregate trades by (asset, side, outcome)
+    const aggregated: Map<string, UserActivityInterface & { aggregatedIds: any[] }> = new Map();
+
+    for (const trade of allPending) {
+        if (!trade.side || !trade.asset || !trade.outcome) {
+            console.warn(`[SKIP] Missing required fields for aggregation:`, trade.transactionHash);
+            continue;
+        }
+        const key = `${trade.asset}_${trade.side.toLowerCase()}_${trade.outcome}`;
+
+        if (aggregated.has(key)) {
+            const existing = aggregated.get(key)!;
+
+            // Calculate VWAP for the aggregate trade
+            const totalSize = (existing.size || 0) + (trade.size || 0);
+            const totalUsdc = (existing.usdcSize || 0) + (trade.usdcSize || 0);
+
+            existing.price = totalSize > 0 ? totalUsdc / totalSize : 0;
+            existing.size = totalSize;
+            existing.usdcSize = totalUsdc;
+            existing.timestamp = Math.max(existing.timestamp || 0, trade.timestamp || 0);
+            existing.aggregatedIds.push(trade._id);
+        } else {
+            aggregated.set(key, {
+                ...(trade as any),
+                aggregatedIds: [trade._id]
+            });
+        }
+    }
+
+    temp_trades = Array.from(aggregated.values());
+
+    if (temp_trades.length < allPending.length && !ENV.LOG_ONLY_SUCCESS) {
+        console.log(`[AGGREGATION] Bundled ${allPending.length} trades into ${temp_trades.length} transactions.`);
+    }
 };
 
 const doTrading = async (clobClient: ClobClient) => {
-    for (const trade of temp_trades) {
+    for (const trade of temp_trades as (UserActivityInterface & { aggregatedIds?: any[] })[]) {
         if (!ENV.LOG_ONLY_SUCCESS) {
             console.log('Trade to copy:', trade);
         }
@@ -63,6 +104,8 @@ const doTrading = async (clobClient: ClobClient) => {
         let user_position: UserPositionInterface | undefined;
         let my_balance = 1000000;
         let user_balance = 1000000;
+
+        const idsToUpdate = trade.aggregatedIds ? trade.aggregatedIds : [trade._id];
 
         if (!ENV.DRY_RUN) {
             try {
@@ -75,27 +118,34 @@ const doTrading = async (clobClient: ClobClient) => {
                 user_position = (await UserPosition.findOne({ asset: trade.asset })) as any;
             } catch (error) {
                 console.error('Failed to fetch position:', error instanceof Error ? error.message : error);
-                await UserActivity.updateOne({ _id: trade._id }, { $inc: { botExcutedTime: 1 } });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { $inc: { botExcutedTime: 1 } });
                 continue;
             }
         }
 
-        const condition = trade.side.toLowerCase();
+        const side = trade.side || '';
+        const condition = side.toLowerCase();
 
         if (condition === 'buy' || condition === 'sell' || condition === 'merge') {
             try {
                 if (ENV.DRY_RUN && condition === 'merge') {
-                    await UserActivity.updateOne({ _id: trade._id }, { bot: true });
+                    await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
                 } else {
-                    await postOrder(clobClient, condition, my_position, user_position, trade, my_balance, user_balance);
+                    await postOrder(clobClient, condition, my_position, user_position, trade as any, my_balance, user_balance);
                     if (!ENV.DRY_RUN) {
                         await refreshBalances(); // Update cache after successful bet
                     }
                 }
             } catch (error) {
                 console.error(`Error processing trade ${trade.transactionHash}:`, error instanceof Error ? error.message : error);
-                await UserActivity.updateOne({ _id: trade._id }, { $inc: { botExcutedTime: 1 } });
+                await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { $inc: { botExcutedTime: 1 } });
             }
+        } else {
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log(`[SKIP] Trade condition "${condition}" not supported for ${trade.transactionHash}`);
+            }
+            // Mark as handled anyway to prevent infinite loop
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
         }
     }
 };
@@ -357,7 +407,9 @@ const triggerTrading = async (clobClient: ClobClient) => {
     try {
         await readTempTrade();
         if (temp_trades.length > 0) {
-            console.log('💥 New transactions found 💥');
+            if (!ENV.LOG_ONLY_SUCCESS) {
+                console.log('💥 New transactions found 💥');
+            }
             spinner.stop();
             await doTrading(clobClient);
         }

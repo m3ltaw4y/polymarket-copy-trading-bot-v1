@@ -1,32 +1,23 @@
-import moment from 'moment';
+import { getUserActivityModel } from '../models/userHistory';
 import { ENV } from '../config/env';
-import { UserActivityInterface, UserPositionInterface } from '../interfaces/User';
-import { getUserActivityModel, getUserPositionModel } from '../models/userHistory';
 import fetchData from '../utils/fetchData';
 import { tradeEventEmitter } from '../utils/eventEmitter';
 
 const USER_ADDRESS = ENV.USER_ADDRESS;
-const TOO_OLD_TIMESTAMP = ENV.TOO_OLD_TIMESTAMP;
 const FETCH_INTERVAL = ENV.FETCH_INTERVAL;
+const TOO_OLD_TIMESTAMP = ENV.TOO_OLD_TIMESTAMP;
 const PROXY_WALLET = ENV.PROXY_WALLET;
 const TITLE_FILTER = ENV.TITLE_FILTER;
 
-if (!USER_ADDRESS) {
-    throw new Error('USER_ADDRESS is not defined');
-}
-
 const UserActivity = getUserActivityModel(USER_ADDRESS);
-const UserPosition = getUserPositionModel(USER_ADDRESS);
-
-let temp_trades: UserActivityInterface[] = [];
 
 const init = async () => {
-    temp_trades = (await UserActivity.find().exec()).map((trade: any) => trade as UserActivityInterface);
+    // Initial setup if needed
 };
 
 const fetchTradeData = async () => {
     try {
-        const url = `https://data-api.polymarket.com/activity?user=${USER_ADDRESS}&limit=10&type=TRADE`;
+        const url = `https://data-api.polymarket.com/activity?user=${USER_ADDRESS}&limit=1000&type=TRADE`;
         const activities = await fetchData(url);
 
         if (Array.isArray(activities)) {
@@ -41,8 +32,6 @@ const fetchTradeData = async () => {
 
                 const exists = await UserActivity.findOne({ transactionHash: activity.transactionHash });
                 if (!exists) {
-                    console.log(`Found new trade: ${activity.transactionHash}`);
-
                     // Apply TITLE_FILTER
                     let shouldCopy = true;
                     if (TITLE_FILTER && !activity.title.toLowerCase().includes(TITLE_FILTER.toLowerCase())) {
@@ -60,6 +49,7 @@ const fetchTradeData = async () => {
                     await newTrade.save();
 
                     if (shouldCopy) {
+                        console.log(`Found new trade (MIRRORING): ${activity.transactionHash.substring(0, 10)}... - ${activity.title}`);
                         // Emit event to trigger executor immediately
                         tradeEventEmitter.emit('newTrade');
                     }
