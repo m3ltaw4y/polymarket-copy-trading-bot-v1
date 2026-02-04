@@ -60,11 +60,8 @@ const processOnChainTrade = async (trade: any) => {
                     if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN FILTER] Skipping trade for "${title}"`);
                 }
             } else {
-                // If we can't find title, we strictly abide by "Safety First"? 
-                // Or "Speed First"?
-                // Current decision: Skip if filter is ON and title is UNKNOWN.
                 shouldCopy = false;
-                console.log(`[CHAIN FILTER] Skipping unknown asset ${trade.assetId} (Title fetch failed)`);
+                if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN FILTER] Skipping unknown asset ${trade.assetId} (Title fetch failed)`);
             }
         }
 

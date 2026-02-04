@@ -445,7 +445,7 @@ const tradeExecutor = async (clobClient: ClobClient) => {
         // Fallback check every loop iteration (1s)
         await triggerTrading(clobClient);
 
-        if (!isTrading) {
+        if (!isTrading && !ENV.LOG_ONLY_SUCCESS) {
             spinner.start('Waiting for new transactions');
         }
 
