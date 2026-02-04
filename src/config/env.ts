@@ -50,6 +50,8 @@ export const ENV = {
     API_KEY: process.env.API_KEY || '',
     USER_SECRET: process.env.USER_SECRET || '',
     BTC_DATA_STREAM: process.env.BTC_DATA_STREAM || '',
+    USE_PROPOSED_RESOLUTIONS: (process.env.USE_PROPOSED_RESOLUTIONS || '').trim().startsWith('1'),
+    USE_BLOCKCHAIN: (process.env.USE_BLOCKCHAIN || '').trim().startsWith('1'),
     // Analysis mode
     ALGO_ANALYZE: (process.env.ALGO_ANALYZE || '').trim().startsWith('1'),
     ANALYSIS_LOOKBACK_DAYS: parseInt(process.env.ANALYSIS_LOOKBACK_DAYS || '7', 10),
