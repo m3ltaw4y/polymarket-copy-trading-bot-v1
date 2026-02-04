@@ -97,75 +97,116 @@ const processOnChainTrade = async (trade: any) => {
         console.error("Error processing on-chain trade:", e);
     }
 }
+const processingHashes = new Set<string>();
 
-const withRetry = async <T>(fn: () => Promise<T>, retries = 5, delay = 2000): Promise<T> => {
-    try {
-        return await fn();
-    } catch (error: any) {
-        if (retries > 0 && (error.message.includes('Too many requests') || error.message.includes('429') || error.code === 'SERVER_ERROR')) {
-            const wait = error.message.includes('retry in')
-                ? parseInt(error.message.match(/retry in (\d+)s/)?.[1] || '10') * 1000
-                : delay;
+const createProviderPool = (urls: string[]) => {
+    return urls.map(url => ({
+        url,
+        provider: new ethers.providers.JsonRpcProvider(url.trim()),
+        healthy: true,
+        cooldownUntil: 0
+    }));
+};
 
-            console.warn(`[RPC] Rate limited or error. Retrying in ${wait / 1000}s... (${retries} left)`);
-            await new Promise(r => setTimeout(r, wait));
-            return withRetry(fn, retries - 1, delay * 2);
-        }
-        throw error;
+const providers = createProviderPool(RPC_URL ? RPC_URL.split(',') : []);
+
+/**
+ * Races all healthy providers for the fastest response.
+ */
+const raceRpc = async <T>(fn: (p: ethers.providers.JsonRpcProvider) => Promise<T>): Promise<T> => {
+    const now = Date.now();
+    const healthyOnes = providers.filter(p => p.healthy && p.cooldownUntil < now);
+
+    if (healthyOnes.length === 0) {
+        // Reset cooldowns if all are dead to keep trying
+        providers.forEach(p => { p.healthy = true; p.cooldownUntil = 0; });
+        throw new Error("All RPC providers are in cooldown or unhealthy.");
     }
+
+    return new Promise((resolve, reject) => {
+        let completed = false;
+        let errors = 0;
+
+        healthyOnes.forEach(async (pInfo) => {
+            try {
+                const res = await fn(pInfo.provider);
+                if (!completed) {
+                    completed = true;
+                    resolve(res);
+                }
+            } catch (e: any) {
+                if (e.message.includes('Too many requests') || e.message.includes('429')) {
+                    pInfo.cooldownUntil = Date.now() + 10000; // 10s timeout
+                    console.warn(`[RPC] ${pInfo.url} rate limited. Cooling down...`);
+                }
+                errors++;
+                if (errors >= healthyOnes.length && !completed) {
+                    reject(new Error("All raced RPC calls failed."));
+                }
+            }
+        });
+    });
 };
 
 const initChainListener = () => {
-    if (!USE_BLOCKCHAIN || !RPC_URL) return;
+    if (!USE_BLOCKCHAIN || providers.length === 0) return;
 
-    console.log(`⛓️  Starting On-Chain Listener (RPC: ${RPC_URL})...`);
-    const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+    console.log(`⛓️  Starting Parallel On-Chain Listener on ${providers.length} RPCs...`);
     const decoder = new ChainDecoder();
 
-    provider.on("block", async (blockNumber) => {
-        try {
-            const block = await withRetry(() => provider.getBlockWithTransactions(blockNumber));
-            if (!block || !block.transactions) return;
+    providers.forEach(pInfo => {
+        pInfo.provider.on("block", async (blockNumber) => {
+            try {
+                // Fetch block details (Racing)
+                const block = await raceRpc(p => p.getBlockWithTransactions(blockNumber));
+                if (!block || !block.transactions) return;
 
-            // Better Filter: Check if User/Proxy is involved.
-            const userTargetTxs = block.transactions.filter(tx => {
-                // Direct
-                if (tx.from.toLowerCase() === USER_ADDRESS.toLowerCase() ||
-                    (PROXY_WALLET && tx.from.toLowerCase() === PROXY_WALLET.toLowerCase())) return true;
+                // Better Filter: Check if User/Proxy is involved.
+                const userTargetTxs = block.transactions.filter(tx => {
+                    if (processingHashes.has(tx.hash)) return false;
 
-                // Meta-Tx (Data Scan)
-                const targetClean = USER_ADDRESS.toLowerCase().replace('0x', '');
-                const proxyClean = PROXY_WALLET?.toLowerCase().replace('0x', '');
-                if (tx.data) {
-                    const d = tx.data.toLowerCase();
-                    if (targetClean && d.includes(targetClean)) return true;
-                    if (proxyClean && d.includes(proxyClean)) return true;
-                }
-                return false;
-            });
+                    // Direct
+                    if (tx.from.toLowerCase() === USER_ADDRESS.toLowerCase() ||
+                        (PROXY_WALLET && tx.from.toLowerCase() === PROXY_WALLET.toLowerCase())) return true;
 
-            if (userTargetTxs.length > 0) {
-                // Found potential trade, Fetch Receipt & Decode
-                for (const tx of userTargetTxs) {
-                    try {
-                        const receipt = await withRetry(() => provider.getTransactionReceipt(tx.hash));
-                        if (receipt) {
-                            const decoded = decoder.decodeTrade(receipt, USER_ADDRESS, PROXY_WALLET || null);
-                            if (decoded) {
-                                processOnChainTrade(decoded);
+                    // Meta-Tx (Data Scan)
+                    const targetClean = USER_ADDRESS.toLowerCase().replace('0x', '');
+                    const proxyClean = PROXY_WALLET?.toLowerCase().replace('0x', '');
+                    if (tx.data) {
+                        const d = tx.data.toLowerCase();
+                        if (targetClean && d.includes(targetClean)) return true;
+                        if (proxyClean && d.includes(proxyClean)) return true;
+                    }
+                    return false;
+                });
+
+                if (userTargetTxs.length > 0) {
+                    for (const tx of userTargetTxs) {
+                        if (processingHashes.has(tx.hash)) continue;
+                        processingHashes.add(tx.hash);
+
+                        try {
+                            // Fetch Receipt (Racing)
+                            const receipt = await raceRpc(p => p.getTransactionReceipt(tx.hash));
+                            if (receipt) {
+                                const decoded = decoder.decodeTrade(receipt, USER_ADDRESS, PROXY_WALLET || null);
+                                if (decoded) {
+                                    processOnChainTrade(decoded);
+                                }
                             }
+                        } catch (e: any) {
+                            console.error(`[RPC] Receipt fetch failed for ${tx.hash.substring(0, 10)}:`, e.message || e);
+                        } finally {
+                            // Keep in cache for 60s to prevent redundant processing from other RPC block triggers
+                            setTimeout(() => processingHashes.delete(tx.hash), 60000);
                         }
-                    } catch (e: any) {
-                        console.error(`[RPC] Receipt fetch failed for ${tx.hash.substring(0, 10)}:`, e.message || e);
                     }
                 }
-            }
 
-        } catch (e: any) {
-            if (!e.message.includes('Too many requests')) {
-                console.error("[RPC] Listener Error:", e.message || e);
+            } catch (e: any) {
+                // Racing might fail if all nodes are busy
             }
-        }
+        });
     });
 };
 
