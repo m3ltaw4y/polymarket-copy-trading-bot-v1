@@ -15,11 +15,15 @@ const NEG_RISK_CTF_EXCHANGE_ADDRESS = '0xC5d563a36AE78145C45a50134d48A1215220f80
 const CTF_EXCHANGE_ABI = [
     "event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerFillAmount, uint256 takerFillAmount, uint256 fee)"
 ];
+const ERC1155_ABI = [
+    "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+    "event TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)"
+];
 
-const checkApiForTrade = async (knownTxHash: string, startTime: number) => {
+const checkApiForTrade = async (knownTxHash: string, startTime: number, decodedTrade?: any) => {
     const url = `https://data-api.polymarket.com/activity?user=${USER_ADDRESS}&limit=20&type=TRADE`;
     let attempts = 0;
-    const maxAttempts = 60; // Try for 60 seconds
+    const maxAttempts = 120; // Try for 120 seconds
 
     process.stdout.write(`\nAPI Polling for ${knownTxHash.substring(0, 10)}... `);
 
@@ -35,6 +39,13 @@ const checkApiForTrade = async (knownTxHash: string, startTime: number) => {
                     console.log(`\n✅ FOUND in API!`);
                     console.log(`⏱️  Latency: ${latency}ms (${(latency / 1000).toFixed(2)}s)`);
                     console.log(`📅 API Timestamp: ${moment(found.timestamp * 1000).format('HH:mm:ss.SSS')}`);
+
+                    if (decodedTrade) {
+                        console.log(`\n🔍 Verification:`);
+                        console.log(`   Expected Asset: ${decodedTrade.assetId} | Actual: ${found.asset}`);
+                        console.log(`   Expected Side:  ${decodedTrade.side}       | Actual: ${found.side}`);
+                        console.log(`   Expected Size:  ${decodedTrade.size}       | Actual: ${found.size}`);
+                    }
                     return;
                 }
             }
@@ -118,17 +129,50 @@ const main = async () => {
 
                 console.log(`🧱 New Block: ${blockNumber} | Txs: ${block.transactions.length} | Exch: ${exchangeTxs.length}`);
 
-                // Log all exchange activity to help debug Relayer addresses
-                exchangeTxs.forEach(tx => {
-                    console.log(`   [Exchange Activity] From: ${tx.from} | Tx: ${tx.hash}`);
-                });
-
                 if (userTxs.length > 0) {
                     console.log(`\n🚨 FOUND DIRECT TRANSACTION FROM TARGET in Block ${blockNumber}!`);
-                    userTxs.forEach(tx => {
+                    const iface = new ethers.utils.Interface(ERC1155_ABI);
+
+                    for (const tx of userTxs) {
                         console.log(`   Tx: ${tx.hash}`);
-                        checkApiForTrade(tx.hash, Date.now());
-                    });
+
+                        // DECODE LOGS
+                        try {
+                            const receipt = await provider.getTransactionReceipt(tx.hash);
+                            let decodedTrade = null;
+
+                            if (receipt && receipt.logs) {
+                                for (const log of receipt.logs) {
+                                    try {
+                                        const parsed = iface.parseLog(log);
+                                        if (parsed.name === 'TransferSingle') {
+                                            const { operator, from, to, id, value } = parsed.args;
+                                            const targetLower = USER_ADDRESS?.toLowerCase();
+                                            const proxyLower = PROXY_ADDRESS?.toLowerCase();
+
+                                            let side = 'UNKNOWN';
+                                            if (to.toLowerCase() === targetLower || (proxyLower && to.toLowerCase() === proxyLower)) {
+                                                side = 'BUY'; // Receiving tokens = BOUGHT
+                                            } else if (from.toLowerCase() === targetLower || (proxyLower && from.toLowerCase() === proxyLower)) {
+                                                side = 'SELL'; // Sending tokens = SOLD
+                                            }
+
+                                            if (side !== 'UNKNOWN') {
+                                                console.log(`   🔮 DECODED ON-CHAIN: ${side} Asset ${id.toString()} | Amt: ${ethers.utils.formatUnits(value, 6)}`);
+                                                decodedTrade = { side, assetId: id.toString(), size: ethers.utils.formatUnits(value, 6) };
+                                                break; // Found the main event
+                                            }
+                                        }
+                                    } catch (e) { /* ignore non-erc1155 logs */ }
+                                }
+                            }
+
+                            checkApiForTrade(tx.hash, Date.now(), decodedTrade);
+                        } catch (e) {
+                            console.error('Failed to decode receipt:', e);
+                            checkApiForTrade(tx.hash, Date.now());
+                        }
+                    }
                 }
             }
         } catch (e) {
