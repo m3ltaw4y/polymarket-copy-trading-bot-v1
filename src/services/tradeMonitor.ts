@@ -23,18 +23,23 @@ const UserActivity = getUserActivityModel(USER_ADDRESS);
 // Helper to check title if needed
 const fetchMarketTitle = async (assetId: string): Promise<string | null> => {
     try {
-        // Use Data API or CLOB to get market info
-        // CLOB Markets endpoint: https://clob.polymarket.com/markets/{token_id}
-        const url = `${ENV.CLOB_HTTP_URL}markets/${assetId}`;
-        const response = await axios.get(url);
-        if (response.data && response.data.condition_id) {
-            // CLOB returns question/market title in 'question' or 'market_slug'?
-            // Actually, usually it returns the market object.
-            // We can use the 'question' field as title approximation.
-            return response.data.question || response.data.market_slug;
+        // 1. Try CLOB API (Fastest)
+        const clobUrl = `${ENV.CLOB_HTTP_URL}markets/${assetId}`;
+        try {
+            const resp = await axios.get(clobUrl);
+            if (resp.data && resp.data.question) return resp.data.question;
+        } catch (e: any) {
+            // If 404, it might be a Neg Risk asset. Try Gamma.
+        }
+
+        // 2. Try Gamma API (More comprehensive for Neg Risk)
+        const gammaUrl = `https://gamma-api.polymarket.com/events?find=${assetId}`;
+        const gammaResp = await axios.get(gammaUrl);
+        if (gammaResp.data && gammaResp.data.length > 0) {
+            return gammaResp.data[0].title || gammaResp.data[0].question;
         }
     } catch (e) {
-        // console.warn(`Failed to fetch title for asset ${assetId}`);
+        // Silently fail to fallback to API polling
     }
     return null;
 };
@@ -51,7 +56,6 @@ const processOnChainTrade = async (trade: any) => {
         let shouldCopy = true;
 
         if (TITLE_FILTER) {
-            // If filter is active, we MUST check the title
             const fetchedTitle = await fetchMarketTitle(trade.assetId);
             if (fetchedTitle) {
                 title = fetchedTitle;
@@ -60,8 +64,10 @@ const processOnChainTrade = async (trade: any) => {
                     if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN FILTER] Skipping trade for "${title}"`);
                 }
             } else {
-                shouldCopy = false;
-                if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN FILTER] Skipping unknown asset ${trade.assetId} (Title fetch failed)`);
+                // IMPORTANT: If we can't find the title on-chain, DON'T mark it as handled in DB.
+                // Let the API polling fallback catch it and apply the filter there.
+                if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN] Title unknown for ${trade.assetId.substring(0, 10)}... deferring to API polling.`);
+                return;
             }
         }
 
@@ -172,6 +178,10 @@ const initChainListener = () => {
                 // Fetch block details (Racing)
                 const block = await raceRpc(p => p.getBlockWithTransactions(blockNumber));
                 if (!block || !block.transactions) return;
+
+                if (!ENV.LOG_ONLY_SUCCESS && blockNumber % 10 === 0) {
+                    console.log(`[BLOCK] ${blockNumber} raced successfully.`);
+                }
 
                 // Better Filter: Check if User/Proxy is involved.
                 const userTargetTxs = block.transactions.filter(tx => {

@@ -15,6 +15,8 @@ const dryRunStatsSchema = new Schema({
     // Peak capital requirement
     largestMarketSpend: { type: Number, default: 0 },
     largestMarketTitle: { type: String, default: '' },
+    avgLatency: { type: Number, default: 0 },
+    totalTradesWithLatency: { type: Number, default: 0 },
     lastUpdated: { type: Date, default: Date.now },
 });
 

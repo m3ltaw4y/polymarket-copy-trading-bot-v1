@@ -85,10 +85,20 @@ const postOrder = async (
                 console.log('Error posting order: retrying...', resp);
             }
         }
+        const botExecutionTimestamp = Date.now();
+        const latency = botExecutionTimestamp - (trade.timestamp * 1000);
+
         if (retry >= RETRY_LIMIT) {
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true, botExcutedTime: retry });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExcutedTime: retry,
+                botExecutionTimestamp
+            });
         } else {
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExecutionTimestamp
+            });
         }
     } else if (condition === 'buy') {       //Buy strategy
         if (!ENV.LOG_ONLY_SUCCESS) {
@@ -144,7 +154,9 @@ const postOrder = async (
             }
 
             if (ENV.DRY_RUN) {
-                await simulateTrade(trade, 'BUY', remaining / currentPriceBuy, currentPriceBuy);
+                const botExecutionTimestamp = Date.now();
+                const latency = botExecutionTimestamp - (trade.timestamp * 1000);
+                await simulateTrade(trade, 'BUY', remaining / currentPriceBuy, currentPriceBuy, latency);
                 break;
             }
 
@@ -181,10 +193,18 @@ const postOrder = async (
                 console.log('Error posting order: retrying...', resp);
             }
         }
+        const botExecutionTimestamp = Date.now();
         if (retry >= RETRY_LIMIT) {
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true, botExcutedTime: retry });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExcutedTime: retry,
+                botExecutionTimestamp
+            });
         } else {
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExecutionTimestamp
+            });
         }
     } else if (condition === 'sell') {          //Sell strategy
         if (!ENV.LOG_ONLY_SUCCESS) {
@@ -248,7 +268,12 @@ const postOrder = async (
                 console.log(`[DRY RUN] Remaining: ${position.totalShares.toFixed(2)} shares (Avg: $${position.avgPrice.toFixed(4)})`);
             }
 
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
+            const botExecutionTimestamp = Date.now();
+            const latency = botExecutionTimestamp - (trade.timestamp * 1000);
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExecutionTimestamp
+            });
             return;
         }
 
@@ -306,17 +331,25 @@ const postOrder = async (
                 console.log('Error posting order: retrying...', resp);
             }
         }
+        const botExecutionTimestamp = Date.now();
         if (retry >= RETRY_LIMIT) {
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true, botExcutedTime: retry });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExcutedTime: retry,
+                botExecutionTimestamp
+            });
         } else {
-            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
+            await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+                bot: true,
+                botExecutionTimestamp
+            });
         }
     } else {
         console.log('Condition not supported');
     }
 };
 
-const simulateTrade = async (trade: UserActivityInterface & { aggregatedIds?: any[] }, side: string, size: number, price: number) => {
+const simulateTrade = async (trade: UserActivityInterface & { aggregatedIds?: any[] }, side: string, size: number, price: number, latency?: number) => {
     const usdcSize = size * price;
     const idsToUpdate = trade.aggregatedIds ? trade.aggregatedIds : [trade._id];
 
@@ -332,6 +365,7 @@ const simulateTrade = async (trade: UserActivityInterface & { aggregatedIds?: an
         targetPrice: trade.price,
         targetUsdcSize: trade.usdcSize,
         timestamp: Math.floor(Date.now() / 1000),
+        latency: latency,
     });
     await newDryRunTrade.save();
 
@@ -342,7 +376,14 @@ const simulateTrade = async (trade: UserActivityInterface & { aggregatedIds?: an
             conditionId: trade.conditionId,
             title: trade.title,
             outcome: trade.outcome,
+            avgLatency: latency || 0,
+            tradesCount: latency ? 1 : 0
         });
+    } else if (latency) {
+        // Running average for position
+        const newCount = (position.tradesCount || 0) + 1;
+        position.avgLatency = ((position.avgLatency || 0) * (position.tradesCount || 0) + latency) / newCount;
+        position.tradesCount = newCount;
     }
 
     if (side === 'BUY') {
@@ -376,11 +417,23 @@ const simulateTrade = async (trade: UserActivityInterface & { aggregatedIds?: an
     if (totalMarketSpend > (stats.largestMarketSpend || 0)) {
         stats.largestMarketSpend = totalMarketSpend;
         stats.largestMarketTitle = trade.title;
-        await stats.save();
     }
 
+    // Update global average latency
+    if (latency) {
+        const newTotalTrades = (stats.totalTradesWithLatency || 0) + 1;
+        stats.avgLatency = ((stats.avgLatency || 0) * (stats.totalTradesWithLatency || 0) + latency) / newTotalTrades;
+        stats.totalTradesWithLatency = newTotalTrades;
+    }
+
+    await stats.save();
+
     // Mark activity as processed
-    await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, { bot: true });
+    const botExecutionTimestamp = Date.now();
+    await UserActivity.updateMany({ _id: { $in: idsToUpdate } }, {
+        bot: true,
+        botExecutionTimestamp
+    });
 };
 
 export default postOrder;

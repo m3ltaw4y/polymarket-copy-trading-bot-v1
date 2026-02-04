@@ -14,6 +14,8 @@ const dryRunPositionSchema = new Schema({
     isClosed: { type: Boolean, default: false },
     isWinner: { type: Boolean, default: false },
     pnl: { type: Number, default: 0 },
+    avgLatency: { type: Number, default: 0 },
+    tradesCount: { type: Number, default: 0 },
 });
 
 // Compound index to quickly find position for a market and outcome
@@ -31,6 +33,7 @@ const dryRunTradeSchema = new Schema({
     targetPrice: { type: Number, required: true },
     targetUsdcSize: { type: Number, required: true },
     timestamp: { type: Number, required: true },
+    latency: { type: Number, required: false },
 });
 
 const DryRunTrade = mongoose.model('DryRunTrade', dryRunTradeSchema);

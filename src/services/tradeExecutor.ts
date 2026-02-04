@@ -281,6 +281,7 @@ const printOpenPositionsStatus = async () => {
         console.log(`  Winning Positions:  ${stats.winningPositions} (Total Wins: $${stats.totalWins.toFixed(2)})`);
         console.log(`  Losing Positions:   ${stats.losingPositions} (Total Losses: $${stats.totalLosses.toFixed(2)})`);
         console.log(`  Win Rate:           ${winRate.toFixed(2)}%`);
+        console.log(`  Avg Latency:        ${((stats.avgLatency || 0) / 1000).toFixed(2)}s`);
 
         // Target Performance
         console.log('\nTARGET ACCOUNT:');
@@ -307,7 +308,7 @@ const printOpenPositionsStatus = async () => {
         console.log(`📈 OPEN POSITIONS (${activePositions.length})`);
         console.log('--------------------------------------------------');
 
-        const groups: { [key: string]: typeof activePositions } = {};
+        const groups: { [key: string]: any[] } = {};
         activePositions.forEach(p => {
             if (!groups[p.title]) groups[p.title] = [];
             groups[p.title].push(p);
@@ -319,6 +320,7 @@ const printOpenPositionsStatus = async () => {
                 console.log(`  - ${p.outcome}:`);
                 console.log(`    Target: Spent $${(p.targetTotalSpend || 0).toFixed(2)} (Shares: ${(p.targetTotalShares || 0).toFixed(2)} | Avg: $${(p.targetAvgPrice || 0).toFixed(4)})`);
                 console.log(`    Bot   : Spent $${(p.totalSpend || 0).toFixed(2)} (Shares: ${(p.totalShares || 0).toFixed(2)} | Avg: $${(p.avgPrice || 0).toFixed(4)})`);
+                console.log(`    Lat   : Avg Copy Latency: ${((p.avgLatency || 0) / 1000).toFixed(2)}s`);
             });
         }
     } else {
