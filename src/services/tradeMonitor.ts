@@ -98,36 +98,43 @@ const processOnChainTrade = async (trade: any) => {
     }
 }
 const processingHashes = new Set<string>();
+const processingBlocks = new Set<number>();
 
 const createProviderPool = (urls: string[]) => {
     return urls.map(url => ({
         url,
         provider: new ethers.providers.JsonRpcProvider(url.trim()),
         healthy: true,
-        cooldownUntil: 0
+        cooldownUntil: 0,
+        lastLoggedError: 0
     }));
 };
 
 const providers = createProviderPool(RPC_URL ? RPC_URL.split(',') : []);
 
+const LOG_ONLY_SUCCESS = ENV.LOG_ONLY_SUCCESS;
+
 /**
- * Races all healthy providers for the fastest response.
+ * Races healthy providers for the fastest response.
+ * Limits the race to the first 5 healthy nodes to avoid over-requesting public nodes.
  */
 const raceRpc = async <T>(fn: (p: ethers.providers.JsonRpcProvider) => Promise<T>): Promise<T> => {
     const now = Date.now();
-    const healthyOnes = providers.filter(p => p.healthy && p.cooldownUntil < now);
+    let healthyOnes = providers.filter(p => p.healthy && (p.cooldownUntil === 0 || p.cooldownUntil < now));
 
     if (healthyOnes.length === 0) {
-        // Reset cooldowns if all are dead to keep trying
         providers.forEach(p => { p.healthy = true; p.cooldownUntil = 0; });
-        throw new Error("All RPC providers are in cooldown or unhealthy.");
+        healthyOnes = providers;
     }
+
+    // Swarm protection: Only race the first 5 healthy nodes
+    const raceSubset = healthyOnes.slice(0, 5);
 
     return new Promise((resolve, reject) => {
         let completed = false;
         let errors = 0;
 
-        healthyOnes.forEach(async (pInfo) => {
+        raceSubset.forEach(async (pInfo) => {
             try {
                 const res = await fn(pInfo.provider);
                 if (!completed) {
@@ -136,11 +143,14 @@ const raceRpc = async <T>(fn: (p: ethers.providers.JsonRpcProvider) => Promise<T
                 }
             } catch (e: any) {
                 if (e.message.includes('Too many requests') || e.message.includes('429')) {
-                    pInfo.cooldownUntil = Date.now() + 10000; // 10s timeout
-                    console.warn(`[RPC] ${pInfo.url} rate limited. Cooling down...`);
+                    pInfo.cooldownUntil = Date.now() + 60000; // 60s cooldown
+                    if (!LOG_ONLY_SUCCESS && (Date.now() - pInfo.lastLoggedError > 60000)) {
+                        console.warn(`[RPC] ${pInfo.url} rate limited. Cooling down...`);
+                        pInfo.lastLoggedError = Date.now();
+                    }
                 }
                 errors++;
-                if (errors >= healthyOnes.length && !completed) {
+                if (errors >= raceSubset.length && !completed) {
                     reject(new Error("All raced RPC calls failed."));
                 }
             }
@@ -156,6 +166,11 @@ const initChainListener = () => {
 
     providers.forEach(pInfo => {
         pInfo.provider.on("block", async (blockNumber) => {
+            // Deduplicate block processing: Ensure only one race happens per block height
+            if (processingBlocks.has(blockNumber)) return;
+            processingBlocks.add(blockNumber);
+            setTimeout(() => processingBlocks.delete(blockNumber), 30000); // 30s cache
+
             try {
                 // Fetch block details (Racing)
                 const block = await raceRpc(p => p.getBlockWithTransactions(blockNumber));
