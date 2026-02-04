@@ -98,6 +98,23 @@ const processOnChainTrade = async (trade: any) => {
     }
 }
 
+const withRetry = async <T>(fn: () => Promise<T>, retries = 5, delay = 2000): Promise<T> => {
+    try {
+        return await fn();
+    } catch (error: any) {
+        if (retries > 0 && (error.message.includes('Too many requests') || error.message.includes('429') || error.code === 'SERVER_ERROR')) {
+            const wait = error.message.includes('retry in')
+                ? parseInt(error.message.match(/retry in (\d+)s/)?.[1] || '10') * 1000
+                : delay;
+
+            console.warn(`[RPC] Rate limited or error. Retrying in ${wait / 1000}s... (${retries} left)`);
+            await new Promise(r => setTimeout(r, wait));
+            return withRetry(fn, retries - 1, delay * 2);
+        }
+        throw error;
+    }
+};
+
 const initChainListener = () => {
     if (!USE_BLOCKCHAIN || !RPC_URL) return;
 
@@ -107,25 +124,8 @@ const initChainListener = () => {
 
     provider.on("block", async (blockNumber) => {
         try {
-            const block = await provider.getBlockWithTransactions(blockNumber);
+            const block = await withRetry(() => provider.getBlockWithTransactions(blockNumber));
             if (!block || !block.transactions) return;
-
-            // Filter for Exchange Interactions
-            // We use 'exchangeTxs' logic from latencyMonitor just to filter relevant blocks/transactions efficiently?
-            // Actually, we can just iterate all txs if we want, but filtering helps perf.
-
-            const relevantTxs = block.transactions.filter(tx =>
-                tx.to && (
-                    tx.to.toLowerCase() === CTF_EXCHANGE_ADDRESS.toLowerCase() ||
-                    tx.to.toLowerCase() === NEG_RISK_CTF_EXCHANGE_ADDRESS.toLowerCase()
-                )
-            );
-
-            // Note: If Gelato Relayer is used, 'to' might be the Relayer contract, or Gnosis Safe.
-            // BUT, the Relayer calls the Exchange eventually.
-            // Actually, in Meta-Tx, the TX 'to' is the Relayer/Forwarder.
-            // So filtering by CTF_EXCHANGE_ADDRESS might MISS meta-txs initiated by Relayers if the top-level tx is to the Forwarder.
-            // Let's use the robust Logic: Check USER in FROM or DATA.
 
             // Better Filter: Check if User/Proxy is involved.
             const userTargetTxs = block.transactions.filter(tx => {
@@ -148,17 +148,23 @@ const initChainListener = () => {
                 // Found potential trade, Fetch Receipt & Decode
                 for (const tx of userTargetTxs) {
                     try {
-                        const receipt = await provider.getTransactionReceipt(tx.hash);
-                        const decoded = decoder.decodeTrade(receipt, USER_ADDRESS, PROXY_WALLET || null); // Note: ChainDecoder needs updating to accept null proxy? It takes string|null.
-                        if (decoded) {
-                            processOnChainTrade(decoded);
+                        const receipt = await withRetry(() => provider.getTransactionReceipt(tx.hash));
+                        if (receipt) {
+                            const decoded = decoder.decodeTrade(receipt, USER_ADDRESS, PROXY_WALLET || null);
+                            if (decoded) {
+                                processOnChainTrade(decoded);
+                            }
                         }
-                    } catch (e) { console.error("Receipt fetch failed", e); }
+                    } catch (e: any) {
+                        console.error(`[RPC] Receipt fetch failed for ${tx.hash.substring(0, 10)}:`, e.message || e);
+                    }
                 }
             }
 
-        } catch (e) {
-            // console.error("Block Error", e);
+        } catch (e: any) {
+            if (!e.message.includes('Too many requests')) {
+                console.error("[RPC] Listener Error:", e.message || e);
+            }
         }
     });
 };
