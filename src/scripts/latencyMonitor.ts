@@ -80,7 +80,9 @@ const main = async () => {
 
     // Heartbeat & Block Inspector
     provider.on("block", async (blockNumber) => {
-        process.stdout.write(`\r🧱 New Block: ${blockNumber}`);
+        // Use console.log to prevent overwriting
+        // process.stdout.write(`\r🧱 New Block: ${blockNumber}`);
+
         try {
             const block = await provider.getBlockWithTransactions(blockNumber);
             if (block && block.transactions) {
@@ -91,13 +93,35 @@ const main = async () => {
                     )
                 );
 
-                const userTxs = block.transactions.filter(tx =>
-                    tx.from.toLowerCase() === USER_ADDRESS?.toLowerCase() ||
-                    (PROXY_ADDRESS && tx.from.toLowerCase() === PROXY_ADDRESS.toLowerCase())
-                );
+                const userTxs = block.transactions.filter(tx => {
+                    // Check direct sender
+                    if (tx.from.toLowerCase() === USER_ADDRESS?.toLowerCase() ||
+                        (PROXY_ADDRESS && tx.from.toLowerCase() === PROXY_ADDRESS.toLowerCase())) {
+                        return true;
+                    }
 
-                // Update status line
-                process.stdout.write(` | Txs: ${block.transactions.length} | Exch: ${exchangeTxs.length}`);
+                    // Check Meta-Transactions (Relayer)
+                    // We scan the input data for the target address (remove 0x prefix)
+                    const targetClean = USER_ADDRESS?.toLowerCase().replace('0x', '');
+                    const proxyClean = PROXY_ADDRESS?.toLowerCase().replace('0x', '');
+
+                    if (tx.data) {
+                        const dataLower = tx.data.toLowerCase();
+                        if ((targetClean && dataLower.includes(targetClean)) ||
+                            (proxyClean && dataLower.includes(proxyClean))) {
+                            console.log(`\n🕵️ Meta-Transaction detected! (Target address found in input data)`);
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+
+                console.log(`🧱 New Block: ${blockNumber} | Txs: ${block.transactions.length} | Exch: ${exchangeTxs.length}`);
+
+                // Log all exchange activity to help debug Relayer addresses
+                exchangeTxs.forEach(tx => {
+                    console.log(`   [Exchange Activity] From: ${tx.from} | Tx: ${tx.hash}`);
+                });
 
                 if (userTxs.length > 0) {
                     console.log(`\n🚨 FOUND DIRECT TRANSACTION FROM TARGET in Block ${blockNumber}!`);
