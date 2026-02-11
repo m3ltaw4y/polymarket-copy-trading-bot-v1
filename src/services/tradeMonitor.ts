@@ -20,27 +20,77 @@ const NEG_RISK_CTF_EXCHANGE_ADDRESS = '0xC5d563a36AE78145C45a50134d48A1215220f80
 
 const UserActivity = getUserActivityModel(USER_ADDRESS);
 
+// Title cache to avoid redundant API calls
+const titleCache = new Map<string, string>();
+const TITLE_CACHE_TTL = 3600000; // 1 hour in milliseconds
+const titleCacheTimestamps = new Map<string, number>();
+
 // Helper to check title if needed
 const fetchMarketTitle = async (assetId: string): Promise<string | null> => {
+    // Check cache first
+    const now = Date.now();
+    const cached = titleCache.get(assetId);
+    const cacheTime = titleCacheTimestamps.get(assetId);
+
+    if (cached && cacheTime && (now - cacheTime < TITLE_CACHE_TTL)) {
+        return cached;
+    }
+
     try {
-        // 1. Try CLOB API (Fastest)
+        // 1. Try CLOB API (Fastest for standard markets)
         const clobUrl = `${ENV.CLOB_HTTP_URL}markets/${assetId}`;
         try {
-            const resp = await axios.get(clobUrl);
-            if (resp.data && resp.data.question) return resp.data.question;
+            const resp = await axios.get(clobUrl, { timeout: 3000 });
+            if (resp.data && resp.data.question) {
+                const title = resp.data.question;
+                titleCache.set(assetId, title);
+                titleCacheTimestamps.set(assetId, now);
+                return title;
+            }
         } catch (e: any) {
-            // If 404, it might be a Neg Risk asset. Try Gamma.
+            // CLOB 404 is common for Neg Risk, continue to next
         }
 
-        // 2. Try Gamma API (More comprehensive for Neg Risk)
-        const gammaUrl = `https://gamma-api.polymarket.com/events?find=${assetId}`;
-        const gammaResp = await axios.get(gammaUrl);
-        if (gammaResp.data && gammaResp.data.length > 0) {
-            return gammaResp.data[0].title || gammaResp.data[0].question;
+        // 2. Try Gamma API - Method 1: Direct find by token ID
+        try {
+            const gammaUrl = `https://gamma-api.polymarket.com/events?find=${assetId}`;
+            const gammaResp = await axios.get(gammaUrl, { timeout: 3000 });
+            if (gammaResp.data && gammaResp.data.length > 0) {
+                const title = gammaResp.data[0].title || gammaResp.data[0].question;
+                if (title) {
+                    titleCache.set(assetId, title);
+                    titleCacheTimestamps.set(assetId, now);
+                    return title;
+                }
+            }
+        } catch (e) {
+            // Continue to next fallback
         }
+
+        // 3. Try Gamma API - Method 2: Search markets by token ID in outcomes
+        try {
+            const gammaMarketsUrl = `https://gamma-api.polymarket.com/markets?closed=false&limit=100`;
+            const marketsResp = await axios.get(gammaMarketsUrl, { timeout: 5000 });
+            if (marketsResp.data && Array.isArray(marketsResp.data)) {
+                for (const market of marketsResp.data) {
+                    if (market.tokens && market.tokens.some((t: any) => t.token_id === assetId)) {
+                        const title = market.question || market.title;
+                        if (title) {
+                            titleCache.set(assetId, title);
+                            titleCacheTimestamps.set(assetId, now);
+                            return title;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Final fallback failed
+        }
+
     } catch (e) {
-        // Silently fail to fallback to API polling
+        // All lookups failed
     }
+
     return null;
 };
 
@@ -64,10 +114,12 @@ const processOnChainTrade = async (trade: any) => {
                     if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN FILTER] Skipping trade for "${title}"`);
                 }
             } else {
-                // IMPORTANT: If we can't find the title on-chain, DON'T mark it as handled in DB.
-                // Let the API polling fallback catch it and apply the filter there.
-                if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN] Title unknown for ${trade.assetId.substring(0, 10)}... deferring to API polling.`);
-                return;
+                // CRITICAL: We MUST save this trade to DB even if we can't resolve the title.
+                // The hash is already in processingHashes, so if we return here, the API poll
+                // will also skip it, causing the trade to be permanently lost.
+                // Instead, mark it as bot=true (skip) and save it, so at least it's recorded.
+                shouldCopy = false;
+                if (!ENV.LOG_ONLY_SUCCESS) console.log(`[CHAIN] Unknown title for ${trade.assetId.substring(0, 10)}... saving with skip flag.`);
             }
         }
 
@@ -99,7 +151,7 @@ const processOnChainTrade = async (trade: any) => {
     } catch (e) {
         console.error("Error processing on-chain trade:", e);
     }
-}
+};
 const processingHashes = new Set<string>();
 const processingBlocks = new Set<number>();
 
@@ -238,15 +290,32 @@ const init = async () => {
 
 const fetchTradeData = async () => {
     try {
-        const url = `https://data-api.polymarket.com/activity?user=${USER_ADDRESS}&limit=50&type=TRADE`; // Reduced limit for speed
-        const activities = await fetchData(url);
+        const now = Math.floor(Date.now() / 1000);
+        const threshold = now - (TOO_OLD_TIMESTAMP * 60);
 
-        if (Array.isArray(activities)) {
-            const now = Math.floor(Date.now() / 1000);
-            const threshold = now - (TOO_OLD_TIMESTAMP * 60);
+        let offset = 0;
+        const limit = 1000; // Maximum per request
+        let totalFetched = 0;
+        let totalProcessed = 0;
+
+        while (true) {
+            const url = `https://data-api.polymarket.com/activity?user=${USER_ADDRESS}&limit=${limit}&offset=${offset}&type=TRADE`;
+            const activities = await fetchData(url);
+
+            if (!Array.isArray(activities) || activities.length === 0) {
+                // No more trades available
+                break;
+            }
+
+            totalFetched += activities.length;
+            let hitOldThreshold = false;
 
             for (const activity of activities) {
-                if (activity.timestamp < threshold) continue;
+                // Stop processing if we've reached trades older than threshold
+                if (activity.timestamp < threshold) {
+                    hitOldThreshold = true;
+                    break;
+                }
 
                 const exists = await UserActivity.findOne({ transactionHash: activity.transactionHash });
                 if (!exists) {
@@ -266,6 +335,7 @@ const fetchTradeData = async () => {
                         source: 'API'
                     });
                     await newTrade.save();
+                    totalProcessed++;
 
                     if (shouldCopy) {
                         console.log(`Found new trade (API): ${activity.transactionHash.substring(0, 10)}... - ${activity.title}`);
@@ -273,7 +343,19 @@ const fetchTradeData = async () => {
                     }
                 }
             }
+
+            // Stop pagination if we hit old trades or got fewer than requested (end of list)
+            if (hitOldThreshold || activities.length < limit) {
+                if (!ENV.LOG_ONLY_SUCCESS && totalFetched > 0) {
+                    console.log(`[API FETCH] Completed. Fetched ${totalFetched} trades, processed ${totalProcessed} new ones.`);
+                }
+                break;
+            }
+
+            // Continue to next page
+            offset += limit;
         }
+
     } catch (error: any) {
         console.error('Error in fetchTradeData:', error.message || error);
     }

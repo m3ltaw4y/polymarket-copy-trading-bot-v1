@@ -57,41 +57,13 @@ const readTempTrade = async () => {
         return;
     }
 
-    // Aggregate trades by (asset, side, outcome)
-    const aggregated: Map<string, UserActivityInterface & { aggregatedIds: any[] }> = new Map();
-
-    for (const trade of allPending) {
-        if (!trade.side || !trade.asset || !trade.outcome) {
-            console.warn(`[SKIP] Missing required fields for aggregation:`, trade.transactionHash);
-            continue;
-        }
-        const key = `${trade.asset}_${trade.side.toLowerCase()}_${trade.outcome}`;
-
-        if (aggregated.has(key)) {
-            const existing = aggregated.get(key)!;
-
-            // Calculate VWAP for the aggregate trade
-            const totalSize = (existing.size || 0) + (trade.size || 0);
-            const totalUsdc = (existing.usdcSize || 0) + (trade.usdcSize || 0);
-
-            existing.price = totalSize > 0 ? totalUsdc / totalSize : 0;
-            existing.size = totalSize;
-            existing.usdcSize = totalUsdc;
-            existing.timestamp = Math.max(existing.timestamp || 0, trade.timestamp || 0);
-            existing.aggregatedIds.push(trade._id);
-        } else {
-            aggregated.set(key, {
-                ...(trade as any),
-                aggregatedIds: [trade._id]
-            });
-        }
-    }
-
-    temp_trades = Array.from(aggregated.values());
-
-    if (temp_trades.length < allPending.length && !ENV.LOG_ONLY_SUCCESS) {
-        console.log(`[AGGREGATION] Bundled ${allPending.length} trades into ${temp_trades.length} transactions.`);
-    }
+    // Process each trade individually - NO aggregation
+    // Previously, we bundled all trades for same asset+side+outcome into ONE trade,
+    // which caused massive under-reporting (e.g., 100 trades showing as 1)
+    temp_trades = allPending.map(trade => ({
+        ...trade,
+        aggregatedIds: [trade._id]
+    })) as any;
 };
 
 const doTrading = async (clobClient: ClobClient) => {
